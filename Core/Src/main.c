@@ -141,6 +141,13 @@ int main(void)
       printf("loop_counter: %lu\n", loop_counter);
       loop_counter = 0;
       next_loop_counter_log = now + 1000;
+      // HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5); // toggle led using HAL function
+      // HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET); // turn on led using HAL function
+      // HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET); // turn off led using HAL function
+
+      BSP_LED_Toggle(LED2); // toggle led using BSP function
+      // BSP_LED_On(LED2); // turn on led using BSP function
+      // BSP_LED_Off(LED2); // turn off led using BSP function
     }
 
     loop_counter++;
