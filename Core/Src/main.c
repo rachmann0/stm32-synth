@@ -116,6 +116,10 @@ int main(void)
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
 
+  uint32_t loop_counter = 0;
+  uint32_t now = HAL_GetTick();
+  uint32_t next_loop_counter_log = now + 1000;
+
   /* USER CODE END 2 */
 
   /* Initialize leds */
@@ -124,16 +128,10 @@ int main(void)
   /* Initialize USER push-button, will be used to trigger an interrupt each time it's pressed.*/
   BSP_PB_Init(BUTTON_USER, BUTTON_MODE_EXTI);
 
-  uint32_t loop_counter = 0;
-  uint32_t now = HAL_GetTick();
-  uint32_t next_loop_counter_log = now + 1000;
-
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    /* USER CODE END WHILE */
-
     now = HAL_GetTick();
 
     // log loop counter
@@ -152,6 +150,8 @@ int main(void)
 
     loop_counter++;
     
+
+    /* USER CODE END WHILE */
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
