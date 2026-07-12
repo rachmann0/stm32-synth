@@ -21,7 +21,10 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include <stdint.h>
 #include <stdio.h>
+#include <math.h>
+#include <stdbool.h>
 
 /* USER CODE END Includes */
 
@@ -32,7 +35,11 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define DMA_BUFFER_SIZE 32
+// #define SAMPLE_RATE 44100
+const float SAMPLE_RATE = 84.0f / 1905.0f;
+#define OUTPUT_MID 2048 // 12-bit DAC, mid value is 2048
+#define DEBOUNCE_MS 200
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -43,16 +50,40 @@
 
 /* Private variables ---------------------------------------------------------*/
 
+DAC_HandleTypeDef hdac;
+DMA_HandleTypeDef hdma_dac1;
+
+TIM_HandleTypeDef htim6;
+
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
+const float two_pi = 2 * M_PI;
+
+uint32_t cb_counter = 0; // callback counter, incremented in timer interrupt
+uint32_t cb_full = 0;
+uint32_t cb_half = 0;
+
+uint32_t last_button_press_time = 0; // last time the button was pressed, for debouncing
+// volatile because it is modified in an interrupt and used in the main loop, so the compiler should not optimize it away
+volatile bool is_button_pressed = 0;
+bool is_timer_running = 1;
+
+uint16_t dma_buffer[2 * DMA_BUFFER_SIZE]; // buffer for DMA transfer
+// twice the dma buffer cuz we use circular mode
+
+float angle = 0;
+float angle_increment = two_pi * 440 / SAMPLE_RATE; // 440 Hz sine wave
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_USART2_UART_Init(void);
+static void MX_TIM6_Init(void);
+static void MX_DAC_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -80,6 +111,53 @@ int _write(int fd, char* ptr, int len) {
 inline uint32_t HAL_GetTick(void)
 {
   return uwTick;
+}
+
+// callbacks
+inline void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) // timer cb
+{
+  if (htim->Instance == TIM6) {
+    cb_counter++; // increment callback counter
+  }
+}
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) // button cb
+{
+    // if (GPIO_Pin == BUTTON_USER)   // or the appropriate pin macro
+    if (GPIO_Pin == GPIO_PIN_13)   // or the appropriate pin macro
+    {
+      uint32_t now = HAL_GetTick();
+      if ( now - last_button_press_time >= DEBOUNCE_MS) {
+        last_button_press_time = now;
+        is_button_pressed = 1;
+      }
+    }
+}
+
+static inline void do_dac(uint16_t *buffer){
+  for (int i = 0; i < DMA_BUFFER_SIZE; i++) {
+    // fill buffer with a sine wave
+    // buffer[i] = OUTPUT_MID + (OUTPUT_MID - 1) * sinf(2 * M_PI * i / DMA_BUFFER_SIZE);
+    // buffer[i] = OUTPUT_MID - (OUTPUT_MID * cosf(angle)); // fill buffer with a sine wave
+    // // buffer[i] = 2*(OUTPUT_MID - (OUTPUT_MID * cosf(angle))); // fill buffer with a sine wave
+    // angle += angle_increment;
+    // if (angle > two_pi) {
+    //   angle -= two_pi; // wrap angle to 0-2pi
+    // }
+
+    // fill buffer with a ramp
+    buffer[i] = i * 5; // fill buffer with a ramp
+  }
+}
+
+inline void HAL_DAC_ConvCpltCallbackCh1(DAC_HandleTypeDef *hdac)
+{
+  cb_full++;
+  do_dac(&dma_buffer[DMA_BUFFER_SIZE]); // fill second half of buffer
+}
+inline void HAL_DAC_ConvHalfCpltCallbackCh1(DAC_HandleTypeDef *hdac)
+{
+  cb_half++;
+  do_dac(&dma_buffer[0]); // fill first half of buffer
 }
 
 /* USER CODE END 0 */
@@ -113,12 +191,20 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_USART2_UART_Init();
+  MX_TIM6_Init();
+  MX_DAC_Init();
   /* USER CODE BEGIN 2 */
+  printf("Starting main loop...\n");
+
+  HAL_TIM_Base_Start_IT(&htim6); // start timer 6 in interrupt mode
+  HAL_DAC_Start_DMA(&hdac, DAC_CHANNEL_1, (uint32_t*)dma_buffer, 2 * DMA_BUFFER_SIZE, DAC_ALIGN_12B_R); // start DAC in DMA mode
 
   uint32_t loop_counter = 0;
   uint32_t now = HAL_GetTick();
-  uint32_t next_loop_counter_log = now + 1000;
+  #define LOOP_COUNTER_LOG_INTERVAL 1000
+  uint32_t next_loop_counter_log = now + LOOP_COUNTER_LOG_INTERVAL;
 
   /* USER CODE END 2 */
 
@@ -134,11 +220,41 @@ int main(void)
   {
     now = HAL_GetTick();
 
+    // if (BSP_PB_GetState(BUTTON_USER) == GPIO_PIN_SET) {
+    // if (BSP_PB_GetState(BUTTON_USER)) {
+    //   if(last_button_press_time)
+    //   // button is pressed
+    //   printf("Button pressed!\n");
+    // }
+
+    if (is_button_pressed) {
+      is_button_pressed = 0;
+      printf("Button pressed!\n");
+
+      // toggle timer6
+      if (is_timer_running)
+      {
+          HAL_TIM_Base_Stop(&htim6);
+      }
+      else
+      {
+          HAL_TIM_Base_Start(&htim6);
+      }
+
+      is_timer_running = !is_timer_running;
+    }
+
     // log loop counter
     if (now >= next_loop_counter_log) {
       printf("loop_counter: %lu\n", loop_counter);
+      // printf("callback counter: %lu Hz\n", cb_counter);
+      // printf("callback half: %lu Hz\n", cb_half);
+      // printf("callback full: %lu Hz\n", cb_full);
       loop_counter = 0;
-      next_loop_counter_log = now + 1000;
+      cb_counter = 0;
+      cb_half = 0;
+      cb_full = 0;
+      next_loop_counter_log = now + LOOP_COUNTER_LOG_INTERVAL;
       // HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5); // toggle led using HAL function
       // HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET); // turn on led using HAL function
       // HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET); // turn off led using HAL function
@@ -152,6 +268,7 @@ int main(void)
     
 
     /* USER CODE END WHILE */
+
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
@@ -205,6 +322,84 @@ void SystemClock_Config(void)
 }
 
 /**
+  * @brief DAC Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_DAC_Init(void)
+{
+
+  /* USER CODE BEGIN DAC_Init 0 */
+
+  /* USER CODE END DAC_Init 0 */
+
+  DAC_ChannelConfTypeDef sConfig = {0};
+
+  /* USER CODE BEGIN DAC_Init 1 */
+
+  /* USER CODE END DAC_Init 1 */
+
+  /** DAC Initialization
+  */
+  hdac.Instance = DAC;
+  if (HAL_DAC_Init(&hdac) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** DAC channel OUT1 config
+  */
+  sConfig.DAC_Trigger = DAC_TRIGGER_T6_TRGO;
+  sConfig.DAC_OutputBuffer = DAC_OUTPUTBUFFER_ENABLE;
+  if (HAL_DAC_ConfigChannel(&hdac, &sConfig, DAC_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN DAC_Init 2 */
+
+  /* USER CODE END DAC_Init 2 */
+
+}
+
+/**
+  * @brief TIM6 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM6_Init(void)
+{
+
+  /* USER CODE BEGIN TIM6_Init 0 */
+
+  /* USER CODE END TIM6_Init 0 */
+
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM6_Init 1 */
+
+  /* USER CODE END TIM6_Init 1 */
+  htim6.Instance = TIM6;
+  htim6.Init.Prescaler = 0;
+  htim6.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim6.Init.Period = 1905-1;
+  htim6.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim6) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_UPDATE;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim6, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM6_Init 2 */
+
+  /* USER CODE END TIM6_Init 2 */
+
+}
+
+/**
   * @brief USART2 Initialization Function
   * @param None
   * @retval None
@@ -234,6 +429,22 @@ static void MX_USART2_UART_Init(void)
   /* USER CODE BEGIN USART2_Init 2 */
 
   /* USER CODE END USART2_Init 2 */
+
+}
+
+/**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Stream5_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream5_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream5_IRQn);
 
 }
 
