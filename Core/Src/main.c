@@ -67,7 +67,7 @@ uint32_t cb_half = 0;
 uint32_t last_button_press_time = 0; // last time the button was pressed, for debouncing
 // volatile because it is modified in an interrupt and used in the main loop, so the compiler should not optimize it away
 volatile bool is_button_pressed = 0;
-bool is_timer_running = 1;
+bool is_timer_running = 0;
 
 uint16_t dma_buffer[2 * DMA_BUFFER_SIZE]; // buffer for DMA transfer
 // twice the dma buffer cuz we use circular mode
@@ -198,7 +198,7 @@ int main(void)
   /* USER CODE BEGIN 2 */
   printf("Starting main loop...\n");
 
-  HAL_TIM_Base_Start_IT(&htim6); // start timer 6 in interrupt mode
+  // HAL_TIM_Base_Start_IT(&htim6); // start timer 6 in interrupt mode
   HAL_DAC_Start_DMA(&hdac, DAC_CHANNEL_1, (uint32_t*)dma_buffer, 2 * DMA_BUFFER_SIZE, DAC_ALIGN_12B_R); // start DAC in DMA mode
 
   uint32_t loop_counter = 0;
@@ -234,6 +234,7 @@ int main(void)
       // toggle timer6
       if (is_timer_running)
       {
+          // no need to start TIM in interrupt mode, because we are using DAC with DMA, which will trigger TIM6 automatically
           HAL_TIM_Base_Stop(&htim6);
       }
       else
