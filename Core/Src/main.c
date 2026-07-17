@@ -76,7 +76,9 @@ uint16_t dma_buffer[2 * DMA_BUFFER_SIZE]; // buffer for DMA transfer
 
 float angle = 0;
 float angle_increment = two_pi * 440 / SAMPLE_RATE; // 440 Hz sine wave
-// float angle_increment = two_pi * 880 / SAMPLE_RATE; // 440 Hz sine wave
+
+// float phase = 0;
+// float phase_increment
 
 /* USER CODE END PV */
 
@@ -143,21 +145,27 @@ static inline void do_dac(uint16_t *buffer){
     // fill buffer with a sine wave
     // buffer[i] = OUTPUT_MID + (OUTPUT_MID - 1) * sinf(2 * M_PI * i / DMA_BUFFER_SIZE);
 
-    const float amplitude = OUTPUT_MID / 10.0f;
+    // float amplitude = OUTPUT_MID / 30.0f; // 90% of the DAC range, to avoid clipping
+    float amplitude = OUTPUT_MID * 0.9f; // 90% of the DAC range, to avoid clipping
+    float volume = 0.03f;
+    amplitude *= volume; // apply volume to amplitude
     /*
     don't just scale the whole thing. keep the mid value at 2048,
     otherwise DC offset will be introduced,
     which can cause the output to be clipped at the top and bottom of the DAC range.
     volume isn't just a multiplier, it's an offset too. the sine wave should oscillate around the mid value, not around 0.
     */
-    buffer[i] = OUTPUT_MID - (amplitude * cosf(angle)); // fill buffer with a sine wave
+
+    float wave = sinf(angle);
+    // float wave = 2.0f * (angle/two_pi) - 1.0f;
+    buffer[i] = OUTPUT_MID + amplitude * wave;
+
+    // increment angle
     angle += angle_increment;
+    // wrap angle
     if (angle > two_pi) {
       angle -= two_pi; // wrap angle to 0-2pi
     }
-
-    // fill buffer with a sawtooth wave
-    // buffer[i] = i * 5; // fill buffer with a ramp
   }
 }
 
