@@ -37,7 +37,9 @@
 /* USER CODE BEGIN PD */
 #define DMA_BUFFER_SIZE 32
 // #define SAMPLE_RATE 44100
-const float SAMPLE_RATE = 84.0f / 1905.0f;
+#define CLOCK_SPEED 84000000
+#define PERIOD 1905 // 44.1 kHz sample rate, 84 MHz clock speed, 84e6 / 44100 = 1904.76
+const float SAMPLE_RATE = (float)CLOCK_SPEED / (float)PERIOD;
 #define OUTPUT_MID 2048 // 12-bit DAC, mid value is 2048
 #define DEBOUNCE_MS 200
 /* USER CODE END PD */
@@ -74,6 +76,7 @@ uint16_t dma_buffer[2 * DMA_BUFFER_SIZE]; // buffer for DMA transfer
 
 float angle = 0;
 float angle_increment = two_pi * 440 / SAMPLE_RATE; // 440 Hz sine wave
+// float angle_increment = two_pi * 880 / SAMPLE_RATE; // 440 Hz sine wave
 
 /* USER CODE END PV */
 
@@ -133,19 +136,28 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) // button cb
     }
 }
 
+// const float sine_table[]
+
 static inline void do_dac(uint16_t *buffer){
   for (int i = 0; i < DMA_BUFFER_SIZE; i++) {
     // fill buffer with a sine wave
     // buffer[i] = OUTPUT_MID + (OUTPUT_MID - 1) * sinf(2 * M_PI * i / DMA_BUFFER_SIZE);
-    // buffer[i] = OUTPUT_MID - (OUTPUT_MID * cosf(angle)); // fill buffer with a sine wave
-    // // buffer[i] = 2*(OUTPUT_MID - (OUTPUT_MID * cosf(angle))); // fill buffer with a sine wave
-    // angle += angle_increment;
-    // if (angle > two_pi) {
-    //   angle -= two_pi; // wrap angle to 0-2pi
-    // }
 
-    // fill buffer with a ramp
-    buffer[i] = i * 5; // fill buffer with a ramp
+    const float amplitude = OUTPUT_MID / 10.0f;
+    /*
+    don't just scale the whole thing. keep the mid value at 2048,
+    otherwise DC offset will be introduced,
+    which can cause the output to be clipped at the top and bottom of the DAC range.
+    volume isn't just a multiplier, it's an offset too. the sine wave should oscillate around the mid value, not around 0.
+    */
+    buffer[i] = OUTPUT_MID - (amplitude * cosf(angle)); // fill buffer with a sine wave
+    angle += angle_increment;
+    if (angle > two_pi) {
+      angle -= two_pi; // wrap angle to 0-2pi
+    }
+
+    // fill buffer with a sawtooth wave
+    // buffer[i] = i * 5; // fill buffer with a ramp
   }
 }
 
@@ -199,7 +211,7 @@ int main(void)
   printf("Starting main loop...\n");
 
   // HAL_TIM_Base_Start_IT(&htim6); // start timer 6 in interrupt mode
-  HAL_DAC_Start_DMA(&hdac, DAC_CHANNEL_1, (uint32_t*)dma_buffer, 2 * DMA_BUFFER_SIZE, DAC_ALIGN_12B_R); // start DAC in DMA mode
+  // HAL_DAC_Start_DMA(&hdac, DAC_CHANNEL_1, (uint32_t*)dma_buffer, 2 * DMA_BUFFER_SIZE, DAC_ALIGN_12B_R); // start DAC in DMA mode
 
   uint32_t loop_counter = 0;
   uint32_t now = HAL_GetTick();
@@ -236,10 +248,12 @@ int main(void)
       {
           // no need to start TIM in interrupt mode, because we are using DAC with DMA, which will trigger TIM6 automatically
           HAL_TIM_Base_Stop(&htim6);
+          HAL_DAC_Stop_DMA(&hdac, DAC_CHANNEL_1);
       }
       else
       {
           HAL_TIM_Base_Start(&htim6);
+          HAL_DAC_Start_DMA(&hdac, DAC_CHANNEL_1, (uint32_t*)dma_buffer, 2 * DMA_BUFFER_SIZE, DAC_ALIGN_12B_R);
       }
 
       is_timer_running = !is_timer_running;
@@ -382,7 +396,7 @@ static void MX_TIM6_Init(void)
   htim6.Instance = TIM6;
   htim6.Init.Prescaler = 0;
   htim6.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim6.Init.Period = 1905-1;
+  htim6.Init.Period = PERIOD - 1;
   htim6.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim6) != HAL_OK)
   {
