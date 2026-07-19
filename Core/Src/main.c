@@ -72,13 +72,15 @@ volatile bool is_button_pressed = 0;
 bool is_timer_running = 0;
 
 uint16_t dma_buffer[2 * DMA_BUFFER_SIZE]; // buffer for DMA transfer
+
+#define TABLE_SIZE 1024
+float sine_table[TABLE_SIZE];
+
 // twice the dma buffer cuz we use circular mode
 
-float angle = 0;
-float angle_increment = two_pi * 440 / SAMPLE_RATE; // 440 Hz sine wave
-
-// float phase = 0;
-// float phase_increment
+// phase accumulator
+uint32_t phase = 0;
+uint32_t phase_increment = (uint32_t)(440 * 4294967296.0 / SAMPLE_RATE); // 440 Hz sine wave;
 
 /* USER CODE END PV */
 
@@ -148,6 +150,7 @@ static inline void do_dac(uint16_t *buffer){
     // float amplitude = OUTPUT_MID / 30.0f; // 90% of the DAC range, to avoid clipping
     float amplitude = OUTPUT_MID * 0.9f; // 90% of the DAC range, to avoid clipping
     float volume = 0.03f;
+    // float volume = 0.1f;
     amplitude *= volume; // apply volume to amplitude
     /*
     don't just scale the whole thing. keep the mid value at 2048,
@@ -156,16 +159,19 @@ static inline void do_dac(uint16_t *buffer){
     volume isn't just a multiplier, it's an offset too. the sine wave should oscillate around the mid value, not around 0.
     */
 
-    float wave = sinf(angle);
-    // float wave = 2.0f * (angle/two_pi) - 1.0f;
+    uint32_t index = phase >> 22;
+    float sample = sine_table[index];
+    // sine wave
+    float wave = sample;
+
+    // sawtooth wave
+    // float wave = 2.0f * (phase / 4294967296.0f) - 1.0f; // phase is a uint32_t, so it wraps around at 2^32, which is 4294967296
+
     buffer[i] = OUTPUT_MID + amplitude * wave;
 
-    // increment angle
-    angle += angle_increment;
-    // wrap angle
-    if (angle > two_pi) {
-      angle -= two_pi; // wrap angle to 0-2pi
-    }
+    // increment phase
+    phase += phase_increment;
+    // phase will auto wrap due to uint32_t overflow
   }
 }
 
@@ -217,6 +223,13 @@ int main(void)
   MX_DAC_Init();
   /* USER CODE BEGIN 2 */
   printf("Starting main loop...\n");
+
+  printf("filling sine lookup table...\n");
+  for (int i = 0; i < TABLE_SIZE; i++)
+  {
+      float angle = 2.0f * M_PI * i / TABLE_SIZE;
+      sine_table[i] = sinf(angle);
+  }
 
   // HAL_TIM_Base_Start_IT(&htim6); // start timer 6 in interrupt mode
   // HAL_DAC_Start_DMA(&hdac, DAC_CHANNEL_1, (uint32_t*)dma_buffer, 2 * DMA_BUFFER_SIZE, DAC_ALIGN_12B_R); // start DAC in DMA mode
