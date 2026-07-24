@@ -39,9 +39,15 @@
 // #define SAMPLE_RATE 44100
 #define CLOCK_SPEED 84000000
 #define PERIOD 1905 // 44.1 kHz sample rate, 84 MHz clock speed, 84e6 / 44100 = 1904.76
-const float SAMPLE_RATE = (float)CLOCK_SPEED / (float)PERIOD;
 #define OUTPUT_MID 2048 // 12-bit DAC, mid value is 2048
 #define DEBOUNCE_MS 200
+
+#define SINE_TABLE_SIZE 1024
+
+#define ADC_RESOLUTION pow(2,12)
+#define ADC_DMA_SAMPLES 10
+#define ADC_DMA_BUFFER_SIZE 1 * ADC_DMA_SAMPLES
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -52,15 +58,20 @@ const float SAMPLE_RATE = (float)CLOCK_SPEED / (float)PERIOD;
 
 /* Private variables ---------------------------------------------------------*/
 
+ADC_HandleTypeDef hadc1;
+DMA_HandleTypeDef hdma_adc1;
+
 DAC_HandleTypeDef hdac;
 DMA_HandleTypeDef hdma_dac1;
 
 TIM_HandleTypeDef htim6;
+TIM_HandleTypeDef htim8;
 
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-const float two_pi = 2 * M_PI;
+static const float TWO_PI = 6.28318530718f;
+static const float SAMPLE_RATE = (float)CLOCK_SPEED / (float)PERIOD;
 
 uint32_t cb_counter = 0; // callback counter, incremented in timer interrupt
 uint32_t cb_full = 0;
@@ -72,9 +83,16 @@ volatile bool is_button_pressed = 0;
 bool is_timer_running = 0;
 
 uint16_t dma_buffer[2 * DMA_BUFFER_SIZE]; // buffer for DMA transfer
+uint16_t adc_dma_buffer[2 * ADC_DMA_BUFFER_SIZE];
 
-#define TABLE_SIZE 1024
-float sine_table[TABLE_SIZE];
+uint32_t adc_cb = 0;
+volatile double adc_value = 0.0;
+// float log_table[SINE_TABLE_SIZE];
+
+float sine_table[SINE_TABLE_SIZE];
+
+// synth effects parameters
+// volatile float volume = 0.03f;
 
 // twice the dma buffer cuz we use circular mode
 
@@ -91,6 +109,8 @@ static void MX_DMA_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_TIM6_Init(void);
 static void MX_DAC_Init(void);
+static void MX_ADC1_Init(void);
+static void MX_TIM8_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -149,9 +169,13 @@ static inline void do_dac(uint16_t *buffer){
 
     // float amplitude = OUTPUT_MID / 30.0f; // 90% of the DAC range, to avoid clipping
     float amplitude = OUTPUT_MID * 0.9f; // 90% of the DAC range, to avoid clipping
-    float volume = 0.03f;
-    // float volume = 0.1f;
+    float volume = (float) adc_value / (ADC_RESOLUTION * 100); // scale to 0.0 - 1.0
     amplitude *= volume; // apply volume to amplitude
+
+    // float x = (float) adc_value / (ADC_RESOLUTION); // scale to 0.0 - 1.0
+    // float dB = -60.0f + x * 60.0f;   // -60 dB to 0 dB
+    // float gain = powf(10.0f, dB / 20.0f);
+    // amplitude *= gain;
     /*
     don't just scale the whole thing. keep the mid value at 2048,
     otherwise DC offset will be introduced,
@@ -159,13 +183,13 @@ static inline void do_dac(uint16_t *buffer){
     volume isn't just a multiplier, it's an offset too. the sine wave should oscillate around the mid value, not around 0.
     */
 
-    uint32_t index = phase >> 22;
-    float sample = sine_table[index];
-    // sine wave
-    float wave = sample;
+    //! sine wave
+    // uint32_t index = phase >> 22;
+    // float sample = sine_table[index];
+    // float wave = sample;
 
-    // sawtooth wave
-    // float wave = 2.0f * (phase / 4294967296.0f) - 1.0f; // phase is a uint32_t, so it wraps around at 2^32, which is 4294967296
+    //! sawtooth wave
+    float wave = 2.0f * (phase / 4294967296.0f) - 1.0f; // phase is a uint32_t, so it wraps around at 2^32, which is 4294967296
 
     buffer[i] = OUTPUT_MID + amplitude * wave;
 
@@ -173,6 +197,18 @@ static inline void do_dac(uint16_t *buffer){
     phase += phase_increment;
     // phase will auto wrap due to uint32_t overflow
   }
+}
+
+void process_adc_dma_buffer(uint16_t *buffer) {
+  // process the adc dma buffer, which is filled by the adc dma interrupt
+  // for now, just average the samples and store in adc_value
+  uint32_t sum = 0;
+  for (uint32_t i = 0; i < ADC_DMA_BUFFER_SIZE; i++) {
+    sum += buffer[i];
+  }
+  adc_value = (double)sum / (double)ADC_DMA_BUFFER_SIZE;
+
+  adc_cb++;
 }
 
 inline void HAL_DAC_ConvCpltCallbackCh1(DAC_HandleTypeDef *hdac)
@@ -184,6 +220,13 @@ inline void HAL_DAC_ConvHalfCpltCallbackCh1(DAC_HandleTypeDef *hdac)
 {
   cb_half++;
   do_dac(&dma_buffer[0]); // fill first half of buffer
+}
+
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc){
+  process_adc_dma_buffer(&adc_dma_buffer[ADC_DMA_BUFFER_SIZE]);
+}
+void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc){
+  process_adc_dma_buffer(&adc_dma_buffer[0]);
 }
 
 /* USER CODE END 0 */
@@ -221,16 +264,20 @@ int main(void)
   MX_USART2_UART_Init();
   MX_TIM6_Init();
   MX_DAC_Init();
+  MX_ADC1_Init();
+  MX_TIM8_Init();
   /* USER CODE BEGIN 2 */
   printf("Starting main loop...\n");
 
   printf("filling sine lookup table...\n");
-  for (int i = 0; i < TABLE_SIZE; i++)
+  for (int i = 0; i < SINE_TABLE_SIZE; i++)
   {
-      float angle = 2.0f * M_PI * i / TABLE_SIZE;
+      float angle = TWO_PI * i / SINE_TABLE_SIZE;
       sine_table[i] = sinf(angle);
   }
 
+  HAL_TIM_Base_Start(&htim8);
+  HAL_ADC_Start_DMA(&hadc1, (uint32_t*) &adc_dma_buffer, 2 * ADC_DMA_BUFFER_SIZE);
   // HAL_TIM_Base_Start_IT(&htim6); // start timer 6 in interrupt mode
   // HAL_DAC_Start_DMA(&hdac, DAC_CHANNEL_1, (uint32_t*)dma_buffer, 2 * DMA_BUFFER_SIZE, DAC_ALIGN_12B_R); // start DAC in DMA mode
 
@@ -282,7 +329,12 @@ int main(void)
 
     // log loop counter
     if (now >= next_loop_counter_log) {
-      printf("loop_counter: %lu\n", loop_counter);
+      // printf("loop_counter: %lu\n", loop_counter);
+      printf("adc cb counter: %lu\n", adc_cb);
+      // printf("adc value: %f\n", adc_value); 
+      // newlib-nano printf doesn't support %f, so we need to cast to uint32_t and print as integer
+      printf("%lu\n", (uint32_t)adc_value); 
+
       // printf("callback counter: %lu Hz\n", cb_counter);
       // printf("callback half: %lu Hz\n", cb_half);
       // printf("callback full: %lu Hz\n", cb_full);
@@ -358,6 +410,58 @@ void SystemClock_Config(void)
 }
 
 /**
+  * @brief ADC1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_ADC1_Init(void)
+{
+
+  /* USER CODE BEGIN ADC1_Init 0 */
+
+  /* USER CODE END ADC1_Init 0 */
+
+  ADC_ChannelConfTypeDef sConfig = {0};
+
+  /* USER CODE BEGIN ADC1_Init 1 */
+
+  /* USER CODE END ADC1_Init 1 */
+
+  /** Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion)
+  */
+  hadc1.Instance = ADC1;
+  hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
+  hadc1.Init.Resolution = ADC_RESOLUTION_12B;
+  hadc1.Init.ScanConvMode = DISABLE;
+  hadc1.Init.ContinuousConvMode = DISABLE;
+  hadc1.Init.DiscontinuousConvMode = DISABLE;
+  hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_RISING;
+  hadc1.Init.ExternalTrigConv = ADC_EXTERNALTRIGCONV_T8_TRGO;
+  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc1.Init.NbrOfConversion = 1;
+  hadc1.Init.DMAContinuousRequests = ENABLE;
+  hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+  if (HAL_ADC_Init(&hadc1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
+  */
+  sConfig.Channel = ADC_CHANNEL_0;
+  sConfig.Rank = 1;
+  sConfig.SamplingTime = ADC_SAMPLETIME_480CYCLES;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN ADC1_Init 2 */
+
+  /* USER CODE END ADC1_Init 2 */
+
+}
+
+/**
   * @brief DAC Initialization Function
   * @param None
   * @retval None
@@ -417,7 +521,7 @@ static void MX_TIM6_Init(void)
   htim6.Instance = TIM6;
   htim6.Init.Prescaler = 0;
   htim6.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim6.Init.Period = PERIOD - 1;
+  htim6.Init.Period = 1905-1;
   htim6.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim6) != HAL_OK)
   {
@@ -432,6 +536,52 @@ static void MX_TIM6_Init(void)
   /* USER CODE BEGIN TIM6_Init 2 */
 
   /* USER CODE END TIM6_Init 2 */
+
+}
+
+/**
+  * @brief TIM8 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM8_Init(void)
+{
+
+  /* USER CODE BEGIN TIM8_Init 0 */
+
+  /* USER CODE END TIM8_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM8_Init 1 */
+
+  /* USER CODE END TIM8_Init 1 */
+  htim8.Instance = TIM8;
+  htim8.Init.Prescaler = 84-1;
+  htim8.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim8.Init.Period = 2000-1;
+  htim8.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim8.Init.RepetitionCounter = 0;
+  htim8.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim8) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim8, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_UPDATE;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim8, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM8_Init 2 */
+
+  /* USER CODE END TIM8_Init 2 */
 
 }
 
@@ -476,11 +626,15 @@ static void MX_DMA_Init(void)
 
   /* DMA controller clock enable */
   __HAL_RCC_DMA1_CLK_ENABLE();
+  __HAL_RCC_DMA2_CLK_ENABLE();
 
   /* DMA interrupt init */
   /* DMA1_Stream5_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Stream5_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(DMA1_Stream5_IRQn);
+  /* DMA2_Stream0_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA2_Stream0_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA2_Stream0_IRQn);
 
 }
 
