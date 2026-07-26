@@ -46,7 +46,10 @@
 
 #define ADC_RESOLUTION pow(2,12)
 #define ADC_DMA_SAMPLES 10
-#define ADC_DMA_BUFFER_SIZE 1 * ADC_DMA_SAMPLES
+#define NUM_ADC_CHANNELS 2
+// #define ADC_DMA_BUFFER_SIZE 1 * ADC_DMA_SAMPLES
+
+#define ADC_DMA_BUFFER_SIZE (NUM_ADC_CHANNELS * ADC_DMA_SAMPLES)
 
 /* USER CODE END PD */
 
@@ -86,13 +89,15 @@ uint16_t dma_buffer[2 * DMA_BUFFER_SIZE]; // buffer for DMA transfer
 uint16_t adc_dma_buffer[2 * ADC_DMA_BUFFER_SIZE];
 
 uint32_t adc_cb = 0;
-volatile double adc_value = 0.0;
+// volatile double adc_value = 0.0;
+volatile float adc_values[NUM_ADC_CHANNELS];
 // float log_table[SINE_TABLE_SIZE];
 
 float sine_table[SINE_TABLE_SIZE];
 
 // synth effects parameters
-// volatile float volume = 0.03f;
+volatile float volume = 0.05f;
+volatile float pitch = 1.0f;
 
 // twice the dma buffer cuz we use circular mode
 
@@ -160,17 +165,36 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) // button cb
     }
 }
 
-// const float sine_table[]
+
+void apply_effects(uint16_t *sample) {
+  // apply effects to the sample
+
+  // volume
+  *sample = (uint16_t)((float)(*sample) * volume);
+
+  // low-pass filter
+  // *
+
+  // pitch
+  // *sample = (uint16_t)((float)(*sample) * pitch);
+}
 
 static inline void do_dac(uint16_t *buffer){
+  float amplitude = OUTPUT_MID * 0.9f; // 90% of the DAC range, to avoid clipping
+
+  // update volume
+  // volume = (float) adc_values[0] / (ADC_RESOLUTION); // scale to 0.0 - 1.0
+
+  // update pitch
+  float pitch = (float) adc_values[0] / (ADC_RESOLUTION); // scale to 0.0 - 1.0
+  phase_increment = (uint32_t)(440 * 4294967296.0 / SAMPLE_RATE * pitch); // 440 Hz sine wave, scaled by pitch
+  // float dB = -60.0f + x * 60.0f;   // -60 dB to 0 dB
+  // float gain = powf(10.0f, dB / 20.0f);
+  // pitch = gain;
+
   for (int i = 0; i < DMA_BUFFER_SIZE; i++) {
     // fill buffer with a sine wave
     // buffer[i] = OUTPUT_MID + (OUTPUT_MID - 1) * sinf(2 * M_PI * i / DMA_BUFFER_SIZE);
-
-    // float amplitude = OUTPUT_MID / 30.0f; // 90% of the DAC range, to avoid clipping
-    float amplitude = OUTPUT_MID * 0.9f; // 90% of the DAC range, to avoid clipping
-    float volume = (float) adc_value / (ADC_RESOLUTION * 100); // scale to 0.0 - 1.0
-    amplitude *= volume; // apply volume to amplitude
 
     // float x = (float) adc_value / (ADC_RESOLUTION); // scale to 0.0 - 1.0
     // float dB = -60.0f + x * 60.0f;   // -60 dB to 0 dB
@@ -185,13 +209,16 @@ static inline void do_dac(uint16_t *buffer){
 
     //! sine wave
     // uint32_t index = phase >> 22;
-    // float sample = sine_table[index];
-    // float wave = sample;
+    // float wave = sine_table[index];
 
     //! sawtooth wave
     float wave = 2.0f * (phase / 4294967296.0f) - 1.0f; // phase is a uint32_t, so it wraps around at 2^32, which is 4294967296
 
-    buffer[i] = OUTPUT_MID + amplitude * wave;
+    float sample = wave * amplitude;
+
+    // buffer[i] = OUTPUT_MID + amplitude * wave;
+    buffer[i] = OUTPUT_MID + sample;
+    apply_effects(&buffer[i]);
 
     // increment phase
     phase += phase_increment;
@@ -201,12 +228,22 @@ static inline void do_dac(uint16_t *buffer){
 
 void process_adc_dma_buffer(uint16_t *buffer) {
   // process the adc dma buffer, which is filled by the adc dma interrupt
-  // for now, just average the samples and store in adc_value
-  uint32_t sum = 0;
-  for (uint32_t i = 0; i < ADC_DMA_BUFFER_SIZE; i++) {
-    sum += buffer[i];
+
+  // sum the samples for each channel
+  uint32_t sums[NUM_ADC_CHANNELS] = {0};
+  for (int sample = 0; sample < ADC_DMA_SAMPLES; sample++)
+  {
+      for (int ch = 0; ch < NUM_ADC_CHANNELS; ch++)
+      {
+          sums[ch] += buffer[sample * NUM_ADC_CHANNELS + ch];
+      }
   }
-  adc_value = (double)sum / (double)ADC_DMA_BUFFER_SIZE;
+
+  // average the samples and store in adc_value
+  for (int ch = 0; ch < NUM_ADC_CHANNELS; ch++)
+  {
+      adc_values[ch] = sums[ch] / ADC_DMA_SAMPLES;
+  }
 
   adc_cb++;
 }
@@ -331,9 +368,14 @@ int main(void)
     if (now >= next_loop_counter_log) {
       // printf("loop_counter: %lu\n", loop_counter);
       printf("adc cb counter: %lu\n", adc_cb);
-      // printf("adc value: %f\n", adc_value); 
+      printf("%u %u %u %u %u\n",
+       adc_dma_buffer[0],
+       adc_dma_buffer[1],
+       adc_dma_buffer[2],
+       adc_dma_buffer[3],
+       adc_dma_buffer[4]);
       // newlib-nano printf doesn't support %f, so we need to cast to uint32_t and print as integer
-      printf("%lu\n", (uint32_t)adc_value); 
+      printf("adc_values[0]: %lu\n", (uint32_t)adc_values[0]); 
 
       // printf("callback counter: %lu Hz\n", cb_counter);
       // printf("callback half: %lu Hz\n", cb_half);
@@ -432,13 +474,13 @@ static void MX_ADC1_Init(void)
   hadc1.Instance = ADC1;
   hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
   hadc1.Init.Resolution = ADC_RESOLUTION_12B;
-  hadc1.Init.ScanConvMode = DISABLE;
+  hadc1.Init.ScanConvMode = ENABLE;
   hadc1.Init.ContinuousConvMode = DISABLE;
   hadc1.Init.DiscontinuousConvMode = DISABLE;
   hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_RISING;
   hadc1.Init.ExternalTrigConv = ADC_EXTERNALTRIGCONV_T8_TRGO;
   hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc1.Init.NbrOfConversion = 1;
+  hadc1.Init.NbrOfConversion = 2;
   hadc1.Init.DMAContinuousRequests = ENABLE;
   hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
   if (HAL_ADC_Init(&hadc1) != HAL_OK)
@@ -451,6 +493,15 @@ static void MX_ADC1_Init(void)
   sConfig.Channel = ADC_CHANNEL_0;
   sConfig.Rank = 1;
   sConfig.SamplingTime = ADC_SAMPLETIME_480CYCLES;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
+  */
+  sConfig.Channel = ADC_CHANNEL_1;
+  sConfig.Rank = 2;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();
