@@ -59,6 +59,12 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define WAVE_FORM_Pin GPIO_PIN_2
+#define WAVE_FORM_GPIO_Port GPIOC
+#define WAVE_FORM_EXTI_IRQn EXTI2_IRQn
+#define OSC2_Pin GPIO_PIN_3
+#define OSC2_GPIO_Port GPIOC
+#define OSC2_EXTI_IRQn EXTI3_IRQn
 #define USART_TX_Pin GPIO_PIN_2
 #define USART_TX_GPIO_Port GPIOA
 #define USART_RX_Pin GPIO_PIN_3

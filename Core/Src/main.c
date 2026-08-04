@@ -26,6 +26,8 @@
 #include <math.h>
 #include <stdbool.h>
 
+#include "synth.h"
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -36,17 +38,12 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define DMA_BUFFER_SIZE 32
-// #define SAMPLE_RATE 44100
-#define CLOCK_SPEED 84000000
-#define PERIOD 1905 // 44.1 kHz sample rate, 84 MHz clock speed, 84e6 / 44100 = 1904.76
 #define OUTPUT_MID 2048 // 12-bit DAC, mid value is 2048
 #define DEBOUNCE_MS 200
 
-#define SINE_TABLE_SIZE 1024
-
 #define ADC_RESOLUTION pow(2,12)
 #define ADC_DMA_SAMPLES 10
-#define NUM_ADC_CHANNELS 2
+#define NUM_ADC_CHANNELS 8 // just need to update this when increasing ADC channels
 // #define ADC_DMA_BUFFER_SIZE 1 * ADC_DMA_SAMPLES
 
 #define ADC_DMA_BUFFER_SIZE (NUM_ADC_CHANNELS * ADC_DMA_SAMPLES)
@@ -73,16 +70,18 @@ TIM_HandleTypeDef htim8;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-static const float TWO_PI = 6.28318530718f;
-static const float SAMPLE_RATE = (float)CLOCK_SPEED / (float)PERIOD;
 
 uint32_t cb_counter = 0; // callback counter, incremented in timer interrupt
 uint32_t cb_full = 0;
 uint32_t cb_half = 0;
 
 uint32_t last_button_press_time = 0; // last time the button was pressed, for debouncing
+uint32_t last_OSC2_btn_press_time = 0; // last time the button was pressed, for debouncing
+uint32_t last_WAVE_FORM_btn_press_time = 0; // last time the button was pressed, for debouncing
 // volatile because it is modified in an interrupt and used in the main loop, so the compiler should not optimize it away
-volatile bool is_button_pressed = 0;
+volatile bool is_blue_button_pressed = 0;
+volatile bool is_OSC2_btn_pressed = 0;
+volatile bool is_WAVE_FORM_btn_pressed = 0;
 bool is_timer_running = 0;
 
 uint16_t dma_buffer[2 * DMA_BUFFER_SIZE]; // buffer for DMA transfer
@@ -91,19 +90,12 @@ uint16_t adc_dma_buffer[2 * ADC_DMA_BUFFER_SIZE];
 uint32_t adc_cb = 0;
 // volatile double adc_value = 0.0;
 volatile float adc_values[NUM_ADC_CHANNELS];
-// float log_table[SINE_TABLE_SIZE];
-
-float sine_table[SINE_TABLE_SIZE];
 
 // synth effects parameters
 volatile float volume = 0.05f;
 volatile float pitch = 1.0f;
 
 // twice the dma buffer cuz we use circular mode
-
-// phase accumulator
-uint32_t phase = 0;
-uint32_t phase_increment = (uint32_t)(440 * 4294967296.0 / SAMPLE_RATE); // 440 Hz sine wave;
 
 /* USER CODE END PV */
 
@@ -154,15 +146,34 @@ inline void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) // timer cb
 }
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) // button cb
 {
-    // if (GPIO_Pin == BUTTON_USER)   // or the appropriate pin macro
-    if (GPIO_Pin == GPIO_PIN_13)   // or the appropriate pin macro
-    {
-      uint32_t now = HAL_GetTick();
-      if ( now - last_button_press_time >= DEBOUNCE_MS) {
-        last_button_press_time = now;
-        is_button_pressed = 1;
-      }
+  // blue button from nucleo board
+  if (GPIO_Pin == GPIO_PIN_13)   // or the appropriate pin macro
+  {
+    uint32_t now = HAL_GetTick();
+    if ( now - last_button_press_time >= DEBOUNCE_MS) {
+      last_button_press_time = now;
+      is_blue_button_pressed = 1;
     }
+  }
+
+  // additional buttons
+  if(GPIO_Pin == WAVE_FORM_Pin)
+  {
+    uint32_t now = HAL_GetTick();
+    if ( now - last_WAVE_FORM_btn_press_time >= DEBOUNCE_MS) {
+      last_WAVE_FORM_btn_press_time = now;
+      is_WAVE_FORM_btn_pressed = 1;
+    }
+  }
+  if (GPIO_Pin == OSC2_Pin)
+  {
+    uint32_t now = HAL_GetTick();
+    if ( now - last_OSC2_btn_press_time >= DEBOUNCE_MS) {
+      last_OSC2_btn_press_time = now;
+      is_OSC2_btn_pressed = 1;
+    }
+  }
+
 }
 
 
@@ -173,7 +184,6 @@ void apply_effects(uint16_t *sample) {
   *sample = (uint16_t)((float)(*sample) * volume);
 
   // low-pass filter
-  // *
 
   // pitch
   // *sample = (uint16_t)((float)(*sample) * pitch);
@@ -183,45 +193,27 @@ static inline void do_dac(uint16_t *buffer){
   float amplitude = OUTPUT_MID * 0.9f; // 90% of the DAC range, to avoid clipping
 
   // update volume
-  // volume = (float) adc_values[0] / (ADC_RESOLUTION); // scale to 0.0 - 1.0
+  volume = (float) adc_values[0] / (ADC_RESOLUTION); // scale to 0.0 - 1.0
 
   // update pitch
-  float pitch = (float) adc_values[0] / (ADC_RESOLUTION); // scale to 0.0 - 1.0
-  phase_increment = (uint32_t)(440 * 4294967296.0 / SAMPLE_RATE * pitch); // 440 Hz sine wave, scaled by pitch
-  // float dB = -60.0f + x * 60.0f;   // -60 dB to 0 dB
-  // float gain = powf(10.0f, dB / 20.0f);
-  // pitch = gain;
 
   for (int i = 0; i < DMA_BUFFER_SIZE; i++) {
-    // fill buffer with a sine wave
-    // buffer[i] = OUTPUT_MID + (OUTPUT_MID - 1) * sinf(2 * M_PI * i / DMA_BUFFER_SIZE);
-
-    // float x = (float) adc_value / (ADC_RESOLUTION); // scale to 0.0 - 1.0
-    // float dB = -60.0f + x * 60.0f;   // -60 dB to 0 dB
-    // float gain = powf(10.0f, dB / 20.0f);
-    // amplitude *= gain;
-    /*
-    don't just scale the whole thing. keep the mid value at 2048,
-    otherwise DC offset will be introduced,
-    which can cause the output to be clipped at the top and bottom of the DAC range.
-    volume isn't just a multiplier, it's an offset too. the sine wave should oscillate around the mid value, not around 0.
-    */
-
     //! sine wave
     // uint32_t index = phase >> 22;
     // float wave = sine_table[index];
 
     //! sawtooth wave
-    float wave = 2.0f * (phase / 4294967296.0f) - 1.0f; // phase is a uint32_t, so it wraps around at 2^32, which is 4294967296
+    // float wave = 2.0f * (phase / 4294967296.0f) - 1.0f; // phase is a uint32_t, so it wraps around at 2^32, which is 4294967296
 
-    float sample = wave * amplitude;
+    // float sample = wave * amplitude;
+    float sample = synth_process() * amplitude;
 
     // buffer[i] = OUTPUT_MID + amplitude * wave;
     buffer[i] = OUTPUT_MID + sample;
     apply_effects(&buffer[i]);
 
     // increment phase
-    phase += phase_increment;
+    // phase += phase_increment;
     // phase will auto wrap due to uint32_t overflow
   }
 }
@@ -307,11 +299,7 @@ int main(void)
   printf("Starting main loop...\n");
 
   printf("filling sine lookup table...\n");
-  for (int i = 0; i < SINE_TABLE_SIZE; i++)
-  {
-      float angle = TWO_PI * i / SINE_TABLE_SIZE;
-      sine_table[i] = sinf(angle);
-  }
+  synth_init(); // initialize the synth
 
   HAL_TIM_Base_Start(&htim8);
   HAL_ADC_Start_DMA(&hadc1, (uint32_t*) &adc_dma_buffer, 2 * ADC_DMA_BUFFER_SIZE);
@@ -343,9 +331,16 @@ int main(void)
     //   // button is pressed
     //   printf("Button pressed!\n");
     // }
+    if(is_OSC2_btn_pressed) {
+      is_OSC2_btn_pressed = 0;
+      BSP_LED_Toggle(LED2); // toggle led using BSP function
+      // toggle_OSC2();
+      set_oscillator_waveform(&osc1, (osc1.waveform + 1) % 3); // cycle through waveforms
+    }
 
-    if (is_button_pressed) {
-      is_button_pressed = 0;
+    if (is_blue_button_pressed) {
+      is_blue_button_pressed = 0;
+      BSP_LED_Toggle(LED2); // toggle led using BSP function
       printf("Button pressed!\n");
 
       // toggle timer6
@@ -368,12 +363,12 @@ int main(void)
     if (now >= next_loop_counter_log) {
       // printf("loop_counter: %lu\n", loop_counter);
       printf("adc cb counter: %lu\n", adc_cb);
-      printf("%u %u %u %u %u\n",
-       adc_dma_buffer[0],
-       adc_dma_buffer[1],
-       adc_dma_buffer[2],
-       adc_dma_buffer[3],
-       adc_dma_buffer[4]);
+      // printf("%u %u %u %u %u\n",
+      //  adc_dma_buffer[0],
+      //  adc_dma_buffer[1],
+      //  adc_dma_buffer[2],
+      //  adc_dma_buffer[3],
+      //  adc_dma_buffer[4]);
       // newlib-nano printf doesn't support %f, so we need to cast to uint32_t and print as integer
       printf("adc_values[0]: %lu\n", (uint32_t)adc_values[0]); 
 
@@ -389,7 +384,7 @@ int main(void)
       // HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET); // turn on led using HAL function
       // HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET); // turn off led using HAL function
 
-      BSP_LED_Toggle(LED2); // toggle led using BSP function
+      // BSP_LED_Toggle(LED2); // toggle led using BSP function
       // BSP_LED_On(LED2); // turn on led using BSP function
       // BSP_LED_Off(LED2); // turn off led using BSP function
     }
@@ -480,7 +475,7 @@ static void MX_ADC1_Init(void)
   hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_RISING;
   hadc1.Init.ExternalTrigConv = ADC_EXTERNALTRIGCONV_T8_TRGO;
   hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc1.Init.NbrOfConversion = 2;
+  hadc1.Init.NbrOfConversion = 8;
   hadc1.Init.DMAContinuousRequests = ENABLE;
   hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
   if (HAL_ADC_Init(&hadc1) != HAL_OK)
@@ -502,6 +497,60 @@ static void MX_ADC1_Init(void)
   */
   sConfig.Channel = ADC_CHANNEL_1;
   sConfig.Rank = 2;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
+  */
+  sConfig.Channel = ADC_CHANNEL_6;
+  sConfig.Rank = 3;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
+  */
+  sConfig.Channel = ADC_CHANNEL_7;
+  sConfig.Rank = 4;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
+  */
+  sConfig.Channel = ADC_CHANNEL_8;
+  sConfig.Rank = 5;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
+  */
+  sConfig.Channel = ADC_CHANNEL_9;
+  sConfig.Rank = 6;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
+  */
+  sConfig.Channel = ADC_CHANNEL_10;
+  sConfig.Rank = 7;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
+  */
+  sConfig.Channel = ADC_CHANNEL_11;
+  sConfig.Rank = 8;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -696,6 +745,7 @@ static void MX_DMA_Init(void)
   */
 static void MX_GPIO_Init(void)
 {
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
   /* USER CODE BEGIN MX_GPIO_Init_1 */
 
   /* USER CODE END MX_GPIO_Init_1 */
@@ -705,6 +755,19 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOH_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
+
+  /*Configure GPIO pins : WAVE_FORM_Pin OSC2_Pin */
+  GPIO_InitStruct.Pin = WAVE_FORM_Pin|OSC2_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI2_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI2_IRQn);
+
+  HAL_NVIC_SetPriority(EXTI3_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI3_IRQn);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
