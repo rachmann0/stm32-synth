@@ -10,8 +10,9 @@ void sine_table_init(void);
 
 typedef enum{
     SINE,
+    TRIANGLE,
+    SQUARE,
     SAWTOOTH,
-    SQUARE
 } Waveform;
 
 // one way to think about this is as an oscillator state
@@ -27,6 +28,7 @@ typedef struct {
 void oscillator_init(Oscillator *osc, float freq, float amp);
 float oscillator_process(Oscillator *osc);
 void toggle_OSC2(void);
+void iter_OSC1_waveform();
 
 // SYNTH
 

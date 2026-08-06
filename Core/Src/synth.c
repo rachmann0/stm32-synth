@@ -39,21 +39,28 @@ void oscillator_init(Oscillator *osc, float freq, float amp)
 #define TABLE_BITS 10 // for 1024 sine table entries, 2^10 = 1024
 #define TABLE_SIZE (1 << TABLE_BITS)
 
+const float PHASE_SCALE = 1.0f / 4294967296.0f;
+
 float oscillator_process(Oscillator *osc)
 {
     osc->phase += osc->phase_increment;
 
-    float wave;
+    float wave = 0.0f;
     switch (osc->waveform){
         case SINE:
             uint16_t index = osc->phase >> (32 - TABLE_BITS);
             wave = sine_table[index];
             break;
         case SAWTOOTH:
-            wave = 2.0f * (osc->phase / 4294967296.0f) - 1.0f; // phase is a uint32_t, so it wraps around at 2^32, which is 4294967296
+            wave = 2.0f * (osc->phase * PHASE_SCALE) - 1.0f; // phase is a uint32_t, so it wraps around at 2^32, which is 4294967296
             break;
         case SQUARE: 
-            wave = (osc->phase >= 2147483648U) ? 1.0f : -1.0f; // phase is a uint32_t, so it wraps around at 2^32, which is 4294967296
+            wave = (osc->phase >= 2147483648U) ? 1.0f : -1.0f; // 2147483648U is 2^31, the midpoint of the uint32_t range
+            break;
+        case TRIANGLE: 
+            // wave = (osc->phase > 2147483648U) ? 2.0f * (osc->phase / 2147483648.0f) - 1.0f : - 2.0f * ((osc->phase - 2147483648.0f) / 2147483648.0f) + 1.0f;
+            // wave = (osc->phase > 2147483648U) ? 2.0f * (osc->phase / 2147483648.0f) - 1.0f : - 2.0f * ((osc->phase - 2147483648.0f) / 2147483648.0f) + 1.0f;
+            wave = -2*fabsf(2.0f * (osc->phase * PHASE_SCALE) - 1.0f)+1;
             break;
         default:
             break;
@@ -69,9 +76,10 @@ void toggle_OSC2(void)
     osc2.amplitude = (osc2.amplitude == 0.0f) ? 0.5f : 0.0f;
 }
 
-void set_oscillator_waveform(Oscillator *osc, Waveform waveform)
+void iter_OSC1_waveform()
 {
-    osc->waveform = waveform;
+    osc1.waveform = (osc1.waveform + 1) % 4; // cycle through waveforms
+    // osc1.waveform = (osc1.waveform + 1) % 2; // cycle through waveforms
 }
 
 // SYNTH
