@@ -19,9 +19,15 @@ typedef enum{
 typedef struct {
     // use 32bit phase accumulator
     uint32_t phase;
+    uint32_t phase2;
+    uint32_t phase3;
+    uint32_t phase4;
+    uint32_t phase5;
+
     uint32_t phase_increment;
     float amplitude;
     Waveform waveform;
+    uint32_t chord;
 
 } Oscillator;
 
@@ -29,6 +35,7 @@ void oscillator_init(Oscillator *osc, float freq, float amp);
 float oscillator_process(Oscillator *osc);
 void toggle_OSC2(void);
 void iter_OSC1_waveform();
+void iter_chord();
 
 // SYNTH
 

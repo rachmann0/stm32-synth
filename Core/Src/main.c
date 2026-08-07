@@ -335,7 +335,8 @@ int main(void)
       is_OSC2_btn_pressed = 0;
       BSP_LED_Toggle(LED2); // toggle led using BSP function
       // toggle_OSC2();
-      iter_OSC1_waveform();
+      // iter_OSC1_waveform();
+      iter_chord();
     }
 
     if (is_blue_button_pressed) {
