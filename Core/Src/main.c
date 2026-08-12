@@ -194,6 +194,8 @@ static inline void do_dac(uint16_t *buffer){
 
   // update volume
   volume = (float) adc_values[0] / (ADC_RESOLUTION); // scale to 0.0 - 1.0
+  pitch = (float) adc_values[1] / (ADC_RESOLUTION); // scale to 0.0 - 1.0
+  set_osc1_freq(440.0f * pitch); // update frequency of osc1 based on adc value
 
   // update pitch
 
@@ -331,11 +333,15 @@ int main(void)
     //   // button is pressed
     //   printf("Button pressed!\n");
     // }
+    if(is_WAVE_FORM_btn_pressed) {
+      is_WAVE_FORM_btn_pressed = 0;
+      // BSP_LED_Toggle(LED2); // toggle led using BSP function
+      iter_OSC1_waveform();
+    }
     if(is_OSC2_btn_pressed) {
       is_OSC2_btn_pressed = 0;
       BSP_LED_Toggle(LED2); // toggle led using BSP function
       // toggle_OSC2();
-      // iter_OSC1_waveform();
       iter_chord();
     }
 
@@ -371,7 +377,7 @@ int main(void)
       //  adc_dma_buffer[3],
       //  adc_dma_buffer[4]);
       // newlib-nano printf doesn't support %f, so we need to cast to uint32_t and print as integer
-      printf("adc_values[0]: %lu\n", (uint32_t)adc_values[0]); 
+      printf("adc_values[1]: %lu\n", (uint32_t)adc_values[1]); 
 
       // printf("callback counter: %lu Hz\n", cb_counter);
       // printf("callback half: %lu Hz\n", cb_half);

@@ -44,8 +44,9 @@ void oscillator_init(Oscillator *osc, float freq, float amp)
 
     osc->amplitude = amp;
 
-    osc->waveform = SQUARE;
+    // osc->waveform = SQUARE;
     // osc->waveform = SAWTOOTH;
+    osc->waveform = SINE;
     // osc->waveform = TRIANGLE;
     osc->chord = 0;
 }
@@ -73,6 +74,26 @@ static inline float phase_to_saw(uint32_t phase)
 {
     return 2.0f * (phase * PHASE_SCALE) - 1.0f; // phase is a uint32_t, so it wraps around at 2^32, which is 4294967296
 }
+static inline float compute_sample_value(Waveform waveform, uint32_t phase){
+    float wave = 0.0f;
+    switch (waveform){
+        case SINE:
+            wave = phase_to_sine(phase);
+            break;
+        case TRIANGLE: 
+            wave = phase_to_triangle(phase);
+            break;
+        case SQUARE: 
+            wave = phase_to_square(phase);
+            break;
+        case SAWTOOTH:
+            wave = phase_to_saw(phase);
+            break;
+        default:
+            break;
+    }
+    return wave;
+}
 
 float oscillator_process(Oscillator *osc)
 {
@@ -83,23 +104,23 @@ float oscillator_process(Oscillator *osc)
     osc->phase4 += (uint32_t)(osc->phase_increment * MAJOR_SEVENTH_RATIO);
     osc->phase5 += (uint32_t)(osc->phase_increment * MAJOR_NINTH_RATIO);
 
-    float wave = 0.0f;
-    switch (osc->waveform){
-        case SINE:
-            wave = phase_to_sine(osc->phase);
-            break;
-        case TRIANGLE: 
-            wave = phase_to_triangle(osc->phase);
-            break;
-        case SQUARE: 
-            wave = phase_to_square(osc->phase);
-            break;
-        case SAWTOOTH:
-            wave = phase_to_saw(osc->phase);
-            break;
-        default:
-            break;
-    }
+    float wave = compute_sample_value(osc->waveform, osc->phase);
+    // switch (osc->waveform){
+    //     case SINE:
+    //         wave = phase_to_sine(osc->phase);
+    //         break;
+    //     case TRIANGLE: 
+    //         wave = phase_to_triangle(osc->phase);
+    //         break;
+    //     case SQUARE: 
+    //         wave = phase_to_square(osc->phase);
+    //         break;
+    //     case SAWTOOTH:
+    //         wave = phase_to_saw(osc->phase);
+    //         break;
+    //     default:
+    //         break;
+    // }
 
     // MAJOR CHORD TEST
     float sample = 0.0f;
@@ -130,19 +151,20 @@ float oscillator_process(Oscillator *osc)
     sample += wave*gain;
     // major third
     if (osc->chord>0) {
-        sample += phase_to_saw(osc->phase2)*gain;
+        // sample += phase_to_saw(osc->phase2)*gain;
+        sample += compute_sample_value(osc->waveform, osc->phase2)*gain; // add osc2 to the major third, to create a detuned effect
     }
     // perfect fifth
     if (osc->chord>1) {
-        sample += phase_to_saw(osc->phase3)*gain;
+        sample += compute_sample_value(osc->waveform, osc->phase3)*gain;
     }
     // major seventh
     if (osc->chord>2) {
-        sample += phase_to_saw(osc->phase4)*gain;
+        sample += compute_sample_value(osc->waveform, osc->phase4)*gain;
     }
     // major ninth
     if (osc->chord>3) {
-        sample += phase_to_saw(osc->phase5)*gain;
+        sample += compute_sample_value(osc->waveform, osc->phase5)*gain;
     }
 
 
@@ -172,6 +194,11 @@ void synth_init(void)
     sine_table_init(); // initialize the sine table
     oscillator_init(&osc1, 440.0f, 0.5f);
     oscillator_init(&osc2, 442.0f, 0.5f);
+}
+
+void set_osc1_freq(float freq)
+{
+    osc1.phase_increment = (uint32_t)((freq * 4294967296.0) / SAMPLE_RATE);
 }
 
 float synth_process(void)

@@ -40,6 +40,7 @@ void iter_chord();
 // SYNTH
 
 void synth_init(void);
+void set_osc1_freq(float freq);
 float synth_process(void);
 
 #endif
