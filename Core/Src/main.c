@@ -72,8 +72,6 @@ UART_HandleTypeDef huart2;
 /* USER CODE BEGIN PV */
 
 uint32_t cb_counter = 0; // callback counter, incremented in timer interrupt
-uint32_t cb_full = 0;
-uint32_t cb_half = 0;
 
 uint32_t last_button_press_time = 0; // last time the button was pressed, for debouncing
 uint32_t last_OSC2_btn_press_time = 0; // last time the button was pressed, for debouncing
@@ -87,8 +85,6 @@ bool is_timer_running = 0;
 uint16_t dma_buffer[2 * DMA_BUFFER_SIZE]; // buffer for DMA transfer
 uint16_t adc_dma_buffer[2 * ADC_DMA_BUFFER_SIZE];
 
-uint32_t adc_cb = 0;
-// volatile double adc_value = 0.0;
 volatile float adc_values[NUM_ADC_CHANNELS];
 
 // synth effects parameters
@@ -238,18 +234,14 @@ void process_adc_dma_buffer(uint16_t *buffer) {
   {
       adc_values[ch] = sums[ch] / ADC_DMA_SAMPLES;
   }
-
-  adc_cb++;
 }
 
 inline void HAL_DAC_ConvCpltCallbackCh1(DAC_HandleTypeDef *hdac)
 {
-  cb_full++;
   do_dac(&dma_buffer[DMA_BUFFER_SIZE]); // fill second half of buffer
 }
 inline void HAL_DAC_ConvHalfCpltCallbackCh1(DAC_HandleTypeDef *hdac)
 {
-  cb_half++;
   do_dac(&dma_buffer[0]); // fill first half of buffer
 }
 
@@ -327,15 +319,9 @@ int main(void)
   {
     now = HAL_GetTick();
 
-    // if (BSP_PB_GetState(BUTTON_USER) == GPIO_PIN_SET) {
-    // if (BSP_PB_GetState(BUTTON_USER)) {
-    //   if(last_button_press_time)
-    //   // button is pressed
-    //   printf("Button pressed!\n");
-    // }
     if(is_WAVE_FORM_btn_pressed) {
       is_WAVE_FORM_btn_pressed = 0;
-      // BSP_LED_Toggle(LED2); // toggle led using BSP function
+      BSP_LED_Toggle(LED2); // toggle led using BSP function
       iter_OSC1_waveform();
     }
     if(is_OSC2_btn_pressed) {
@@ -348,7 +334,7 @@ int main(void)
     if (is_blue_button_pressed) {
       is_blue_button_pressed = 0;
       BSP_LED_Toggle(LED2); // toggle led using BSP function
-      printf("Button pressed!\n");
+      // printf("Button pressed!\n");
 
       // toggle timer6
       if (is_timer_running)
@@ -368,32 +354,9 @@ int main(void)
 
     // log loop counter
     if (now >= next_loop_counter_log) {
-      // printf("loop_counter: %lu\n", loop_counter);
-      printf("adc cb counter: %lu\n", adc_cb);
-      // printf("%u %u %u %u %u\n",
-      //  adc_dma_buffer[0],
-      //  adc_dma_buffer[1],
-      //  adc_dma_buffer[2],
-      //  adc_dma_buffer[3],
-      //  adc_dma_buffer[4]);
-      // newlib-nano printf doesn't support %f, so we need to cast to uint32_t and print as integer
-      printf("adc_values[1]: %lu\n", (uint32_t)adc_values[1]); 
-
-      // printf("callback counter: %lu Hz\n", cb_counter);
-      // printf("callback half: %lu Hz\n", cb_half);
-      // printf("callback full: %lu Hz\n", cb_full);
+      printf("loop_counter: %lu\n", loop_counter);
       loop_counter = 0;
-      cb_counter = 0;
-      cb_half = 0;
-      cb_full = 0;
       next_loop_counter_log = now + LOOP_COUNTER_LOG_INTERVAL;
-      // HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5); // toggle led using HAL function
-      // HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET); // turn on led using HAL function
-      // HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET); // turn off led using HAL function
-
-      // BSP_LED_Toggle(LED2); // toggle led using BSP function
-      // BSP_LED_On(LED2); // turn on led using BSP function
-      // BSP_LED_Off(LED2); // turn off led using BSP function
     }
 
     loop_counter++;
