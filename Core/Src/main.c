@@ -37,7 +37,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define DMA_BUFFER_SIZE 32
+#define DAC_DMA_BUFFER_SIZE 32
 #define OUTPUT_MID 2048 // 12-bit DAC, mid value is 2048
 #define DEBOUNCE_MS 200
 
@@ -64,6 +64,8 @@ DMA_HandleTypeDef hdma_adc1;
 DAC_HandleTypeDef hdac;
 DMA_HandleTypeDef hdma_dac1;
 
+I2C_HandleTypeDef hi2c1;
+
 TIM_HandleTypeDef htim6;
 TIM_HandleTypeDef htim8;
 
@@ -82,7 +84,7 @@ volatile bool is_OSC2_btn_pressed = 0;
 volatile bool is_WAVE_FORM_btn_pressed = 0;
 bool is_timer_running = 0;
 
-uint16_t dma_buffer[2 * DMA_BUFFER_SIZE]; // buffer for DMA transfer
+uint16_t dac_dma_buffer[2 * DAC_DMA_BUFFER_SIZE]; // buffer for DMA transfer
 uint16_t adc_dma_buffer[2 * ADC_DMA_BUFFER_SIZE];
 
 volatile float adc_values[NUM_ADC_CHANNELS];
@@ -104,6 +106,7 @@ static void MX_TIM6_Init(void);
 static void MX_DAC_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_TIM8_Init(void);
+static void MX_I2C1_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -195,7 +198,7 @@ static inline void do_dac(uint16_t *buffer){
 
   // update pitch
 
-  for (int i = 0; i < DMA_BUFFER_SIZE; i++) {
+  for (int i = 0; i < DAC_DMA_BUFFER_SIZE; i++) {
     //! sine wave
     // uint32_t index = phase >> 22;
     // float wave = sine_table[index];
@@ -238,11 +241,11 @@ void process_adc_dma_buffer(uint16_t *buffer) {
 
 inline void HAL_DAC_ConvCpltCallbackCh1(DAC_HandleTypeDef *hdac)
 {
-  do_dac(&dma_buffer[DMA_BUFFER_SIZE]); // fill second half of buffer
+  do_dac(&dac_dma_buffer[DAC_DMA_BUFFER_SIZE]); // fill second half of buffer
 }
 inline void HAL_DAC_ConvHalfCpltCallbackCh1(DAC_HandleTypeDef *hdac)
 {
-  do_dac(&dma_buffer[0]); // fill first half of buffer
+  do_dac(&dac_dma_buffer[0]); // fill first half of buffer
 }
 
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc){
@@ -250,6 +253,65 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc){
 }
 void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc){
   process_adc_dma_buffer(&adc_dma_buffer[0]);
+}
+
+
+// OLED TEST
+#define OLED_ADDR (0x3C << 1)
+
+void OLED_Command(uint8_t cmd)
+{
+    uint8_t data[2] = {0x00, cmd};
+    // 0x00 is the control byte used by SH1106, followed by the command byte
+
+    HAL_I2C_Master_Transmit(
+        &hi2c1,
+        OLED_ADDR,
+        data,
+        2,
+        HAL_MAX_DELAY
+    );
+}
+
+void OLED_Init(void)
+{
+    HAL_Delay(100);
+
+    OLED_Command(0xAE); // Display OFF
+
+    OLED_Command(0xD5);
+    OLED_Command(0x80);
+
+    OLED_Command(0xA8);
+    OLED_Command(0x3F);
+
+    OLED_Command(0xD3);
+    OLED_Command(0x00);
+
+    OLED_Command(0x40);
+
+    OLED_Command(0xAD);
+    OLED_Command(0x8B); // Charge pump
+
+    OLED_Command(0xA1); // Segment remap
+    OLED_Command(0xC8); // COM scan direction
+
+    OLED_Command(0xDA);
+    OLED_Command(0x12);
+
+    OLED_Command(0x81);
+    OLED_Command(0x7F);
+
+    OLED_Command(0xD9);
+    OLED_Command(0x22);
+
+    OLED_Command(0xDB);
+    OLED_Command(0x35);
+
+    OLED_Command(0xA4);
+    OLED_Command(0xA6);
+
+    OLED_Command(0xAF); // Display ON
 }
 
 /* USER CODE END 0 */
@@ -289,6 +351,7 @@ int main(void)
   MX_DAC_Init();
   MX_ADC1_Init();
   MX_TIM8_Init();
+  MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
   printf("Starting main loop...\n");
 
@@ -298,7 +361,45 @@ int main(void)
   HAL_TIM_Base_Start(&htim8);
   HAL_ADC_Start_DMA(&hadc1, (uint32_t*) &adc_dma_buffer, 2 * ADC_DMA_BUFFER_SIZE);
   // HAL_TIM_Base_Start_IT(&htim6); // start timer 6 in interrupt mode
-  // HAL_DAC_Start_DMA(&hdac, DAC_CHANNEL_1, (uint32_t*)dma_buffer, 2 * DMA_BUFFER_SIZE, DAC_ALIGN_12B_R); // start DAC in DMA mode
+  // HAL_DAC_Start_DMA(&hdac, DAC_CHANNEL_1, (uint32_t*)dma_buffer, 2 * DAC_DMA_BUFFER_SIZE, DAC_ALIGN_12B_R); // start DAC in DMA mode
+
+
+  OLED_Init();
+  uint8_t data[129];
+
+  // Using SH1106 which has 132x64 memory compared to 128x64 in SSD1306
+  data[0] = 0x40; // 0x40 = following bytes are display data
+
+  for (int i = 1; i < 129; i++)
+      data[i] = 0x00;
+
+  for (int page = 0; page < 8; page++)
+  {
+      OLED_Command(0xB0 + page);
+
+      // Start from column address 2
+      // 0x0 means set lower column address, so 0x02 means set lower column address to 2
+      // 0x10 means set higher column address, so 0x10 means set higher column address to 0
+      // together they set higher column address to 0000 and lower column address to 0010, which is 2 in decimal
+      OLED_Command(0x02);
+      OLED_Command(0x10);
+
+
+      // Only page 0 gets the pixel
+      if (page == 0)
+          data[40] = 0x01;
+      else
+          data[40] = 0x00;
+
+      HAL_I2C_Master_Transmit(
+          &hi2c1,
+          OLED_ADDR,
+          data,
+          129,
+          HAL_MAX_DELAY
+      );
+  }
+
 
   uint32_t loop_counter = 0;
   uint32_t now = HAL_GetTick();
@@ -312,6 +413,7 @@ int main(void)
 
   /* Initialize USER push-button, will be used to trigger an interrupt each time it's pressed.*/
   BSP_PB_Init(BUTTON_USER, BUTTON_MODE_EXTI);
+
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
@@ -346,7 +448,7 @@ int main(void)
       else
       {
           HAL_TIM_Base_Start(&htim6);
-          HAL_DAC_Start_DMA(&hdac, DAC_CHANNEL_1, (uint32_t*)dma_buffer, 2 * DMA_BUFFER_SIZE, DAC_ALIGN_12B_R);
+          HAL_DAC_Start_DMA(&hdac, DAC_CHANNEL_1, (uint32_t*)dac_dma_buffer, 2 * DAC_DMA_BUFFER_SIZE, DAC_ALIGN_12B_R);
       }
 
       is_timer_running = !is_timer_running;
@@ -568,6 +670,48 @@ static void MX_DAC_Init(void)
   /* USER CODE BEGIN DAC_Init 2 */
 
   /* USER CODE END DAC_Init 2 */
+
+}
+
+/**
+  * @brief I2C1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_I2C1_Init(void)
+{
+
+  /* USER CODE BEGIN I2C1_Init 0 */
+
+  /* USER CODE END I2C1_Init 0 */
+
+  /* USER CODE BEGIN I2C1_Init 1 */
+
+  /* USER CODE END I2C1_Init 1 */
+  hi2c1.Instance = I2C1;
+  hi2c1.Init.ClockSpeed = 100000;
+  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
+  hi2c1.Init.OwnAddress1 = 0;
+  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c1.Init.OwnAddress2 = 0;
+  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN I2C1_Init 2 */
+
+  for (uint8_t address = 1; address < 127; address++)
+{
+    if (HAL_I2C_IsDeviceReady(&hi2c1, address << 1, 3, 100) == HAL_OK)
+    {
+        printf("I2C device found at 0x%02X\n", address);
+    }
+}
+
+  /* USER CODE END I2C1_Init 2 */
 
 }
 
