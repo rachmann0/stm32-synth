@@ -386,10 +386,20 @@ int main(void)
 
 
       // Only page 0 gets the pixel
-      if (page == 0)
-          data[40] = 0x01;
-      else
-          data[40] = 0x00;
+      if (page == 0){
+          // data[40] = 0x11;
+          data[40] = 0b01010101;
+          data[41] = 0b10101010;
+      }
+      else if (page == 1){
+          // data[40] = 0x00;
+          // data[41] = 0x00;
+          // data[41] = 0x01;
+      }
+      else{
+          // data[40] = 0x00;
+          // data[41] = 0x00;
+      }
 
       HAL_I2C_Master_Transmit(
           &hi2c1,
@@ -399,6 +409,22 @@ int main(void)
           HAL_MAX_DELAY
       );
   }
+
+  // data[0] = 0x40; // 0x40 = following bytes are display data
+  // OLED_Command(0xB0 + 1);
+  // OLED_Command(0x02);
+  // OLED_Command(0x10);
+
+  // // data[40] = 0x00;
+  // data[42] = 0x01;
+
+  // HAL_I2C_Master_Transmit(
+  //     &hi2c1,
+  //     OLED_ADDR,
+  //     data,
+  //     129,
+  //     HAL_MAX_DELAY
+  // );
 
 
   uint32_t loop_counter = 0;
