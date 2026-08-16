@@ -239,9 +239,147 @@ void process_adc_dma_buffer(uint16_t *buffer) {
   }
 }
 
+// OLED TEST
+#define OLED1_ADDR (0x3D << 1)
+
+void OLED_Command(uint8_t cmd, uint16_t address)
+{
+    uint8_t data[2] = {0x00, cmd};
+    // 0x00 is the control byte used by SH1106, followed by the command byte
+
+    HAL_I2C_Master_Transmit(
+        &hi2c1,
+        address,
+        data,
+        2,
+        HAL_MAX_DELAY
+    );
+}
+
+void OLED_Init(uint16_t address)
+{
+  HAL_Delay(100);
+
+  OLED_Command(0xAE, address); // Display OFF
+
+  OLED_Command(0xD5, address);
+  OLED_Command(0x80, address);
+
+  OLED_Command(0xA8, address);
+  OLED_Command(0x3F, address);
+
+  OLED_Command(0xD3, address);
+  OLED_Command(0x00, address);
+
+  OLED_Command(0x40, address);
+
+  OLED_Command(0x8D, address);
+  OLED_Command(0x14, address); // Charge pump
+
+  OLED_Command(0x20, address);
+  OLED_Command(0x00, address); // Horizontal addressing mode
+
+  OLED_Command(0xA1, address); // Segment remap
+  OLED_Command(0xC8, address); // COM scan direction
+
+  OLED_Command(0xDA, address);
+  OLED_Command(0x12, address);
+
+  OLED_Command(0x81, address);
+  OLED_Command(0x7F, address);
+
+  OLED_Command(0xD9, address);
+  OLED_Command(0xF1, address);
+
+  OLED_Command(0xDB, address);
+  OLED_Command(0x40, address);
+
+  OLED_Command(0xA4, address);
+  OLED_Command(0xA6, address);
+
+  OLED_Command(0xAF, address); // Display ON
+}
+
+uint16_t load_dac_buffer[(2*DAC_DMA_BUFFER_SIZE)*2] = {0}; // total size is 64*2 = 128 which matches the oled width nicely
+uint16_t load_dac_buffer_index = 0;
+uint8_t oled_data[8][129] = {0b00000000};
+uint32_t render_oled_count = 0;
+bool is_oled_rendering = false;
+void render_oled(void){
+  // copy over to load_dac_buffer
+  // if (!is_oled_rendering) {
+    for (int i = 0; i < (2*DAC_DMA_BUFFER_SIZE); i++) {
+      load_dac_buffer[i + (2*DAC_DMA_BUFFER_SIZE) * load_dac_buffer_index] = dac_dma_buffer[i];
+    }
+  // }
+
+  // for (int i = 0; i < DAC_DMA_BUFFER_SIZE; i++) {
+  //   load_dac_buffer[i] = dac_dma_buffer[i];
+  // }
+
+  // if (load_dac_buffer_index == 1 && !is_oled_rendering) { // if load buffer full, render
+  if (load_dac_buffer_index == 1) { // if load buffer full, render
+    render_oled_count++;
+    // clear oled data first
+    // memset(oled_data, 0, sizeof(oled_data));
+    for (int i = 0; i < 8*129; i++) {
+        ((uint8_t*)oled_data)[i] = 0;
+    }
+
+    // map to oled_data
+    for (int i = 0; i < (2*DAC_DMA_BUFFER_SIZE)*2; i++) {
+      uint16_t value = load_dac_buffer[i];
+      printf("value: %lu", value);
+      uint16_t page = 7 - (value>>9);
+      uint8_t command = 1 << (7-((value+1)%8)); // 2**(8-value mod 8)
+      oled_data[page][i+1] = command;
+      // if (page < 4) {
+      //   printf("page < 4");
+      // }
+    }
+    // is_oled_rendering = true;
+//     for (int i = 0; i < (2 * DAC_DMA_BUFFER_SIZE) * 2; i++) {
+
+//     uint16_t value = load_dac_buffer[i];
+
+//     // Map 12-bit DAC value to 0-63 OLED Y coordinate
+//     uint8_t y = value * 63 / 4095;
+
+//     uint8_t page = y / 8;
+//     uint8_t bit  = y % 8;
+
+//     oled_data[page][i + 1] |= (1 << bit);
+// }
+
+    for (int page = 0; page < 8; page++){
+      // for (int i = 1; i < 129; i++)
+      //     oled_data[page][i] = 0x00;
+
+      oled_data[page][0] = 0x40; // 0x40 = following bytes are display data
+      // OLED_Command(0xB0 + page, OLED1_ADDR);
+      // OLED_Command(0x00, OLED1_ADDR);
+      // OLED_Command(0x10, OLED1_ADDR);
+      
+      // HAL_I2C_Master_Transmit(
+      //   &hi2c1,
+      //   OLED1_ADDR,
+      //   oled_data[page],
+      //   129,
+      //   HAL_MAX_DELAY
+      // );
+    }
+
+
+  }
+
+  load_dac_buffer_index = (load_dac_buffer_index+1)%2;
+}
+// OLED TEST
+
 inline void HAL_DAC_ConvCpltCallbackCh1(DAC_HandleTypeDef *hdac)
 {
   do_dac(&dac_dma_buffer[DAC_DMA_BUFFER_SIZE]); // fill second half of buffer
+  render_oled(); // call once buffer is full
 }
 inline void HAL_DAC_ConvHalfCpltCallbackCh1(DAC_HandleTypeDef *hdac)
 {
@@ -255,64 +393,6 @@ void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc){
   process_adc_dma_buffer(&adc_dma_buffer[0]);
 }
 
-
-// OLED TEST
-#define OLED_ADDR (0x3C << 1)
-
-void OLED_Command(uint8_t cmd)
-{
-    uint8_t data[2] = {0x00, cmd};
-    // 0x00 is the control byte used by SH1106, followed by the command byte
-
-    HAL_I2C_Master_Transmit(
-        &hi2c1,
-        OLED_ADDR,
-        data,
-        2,
-        HAL_MAX_DELAY
-    );
-}
-
-void OLED_Init(void)
-{
-    HAL_Delay(100);
-
-    OLED_Command(0xAE); // Display OFF
-
-    OLED_Command(0xD5);
-    OLED_Command(0x80);
-
-    OLED_Command(0xA8);
-    OLED_Command(0x3F);
-
-    OLED_Command(0xD3);
-    OLED_Command(0x00);
-
-    OLED_Command(0x40);
-
-    OLED_Command(0xAD);
-    OLED_Command(0x8B); // Charge pump
-
-    OLED_Command(0xA1); // Segment remap
-    OLED_Command(0xC8); // COM scan direction
-
-    OLED_Command(0xDA);
-    OLED_Command(0x12);
-
-    OLED_Command(0x81);
-    OLED_Command(0x7F);
-
-    OLED_Command(0xD9);
-    OLED_Command(0x22);
-
-    OLED_Command(0xDB);
-    OLED_Command(0x35);
-
-    OLED_Command(0xA4);
-    OLED_Command(0xA6);
-
-    OLED_Command(0xAF); // Display ON
-}
 
 /* USER CODE END 0 */
 
@@ -364,7 +444,7 @@ int main(void)
   // HAL_DAC_Start_DMA(&hdac, DAC_CHANNEL_1, (uint32_t*)dma_buffer, 2 * DAC_DMA_BUFFER_SIZE, DAC_ALIGN_12B_R); // start DAC in DMA mode
 
 
-  OLED_Init();
+  OLED_Init(OLED1_ADDR);
   uint8_t data[129];
 
   // Using SH1106 which has 132x64 memory compared to 128x64 in SSD1306
@@ -375,35 +455,34 @@ int main(void)
 
   for (int page = 0; page < 8; page++)
   {
-      OLED_Command(0xB0 + page);
+      OLED_Command(0xB0 + page, OLED1_ADDR);
 
       // Start from column address 2
-      // 0x0 means set lower column address, so 0x02 means set lower column address to 2
-      // 0x10 means set higher column address, so 0x10 means set higher column address to 0
-      // together they set higher column address to 0000 and lower column address to 0010, which is 2 in decimal
-      OLED_Command(0x02);
-      OLED_Command(0x10);
+      OLED_Command(0x00, OLED1_ADDR);
+      OLED_Command(0x10, OLED1_ADDR);
 
 
       // Only page 0 gets the pixel
       if (page == 0){
           // data[40] = 0x11;
-          data[40] = 0b01010101;
-          data[41] = 0b10101010;
+          // data[40] = 0b01010101;
+          // data[40] = 0b00000001;
+          data[40] = 0b10000000;
+          // data[41] = 0b10101010;
       }
       else if (page == 1){
-          // data[40] = 0x00;
-          // data[41] = 0x00;
+          data[40] = 0x00;
+          data[41] = 0x00;
           // data[41] = 0x01;
       }
       else{
-          // data[40] = 0x00;
-          // data[41] = 0x00;
+          data[40] = 0x00;
+          data[41] = 0x00;
       }
 
       HAL_I2C_Master_Transmit(
           &hi2c1,
-          OLED_ADDR,
+          OLED1_ADDR,
           data,
           129,
           HAL_MAX_DELAY
@@ -483,8 +562,31 @@ int main(void)
     // log loop counter
     if (now >= next_loop_counter_log) {
       printf("loop_counter: %lu\n", loop_counter);
+      printf("render_oled_count: %lu\n", render_oled_count);
       loop_counter = 0;
+      render_oled_count = 0;
       next_loop_counter_log = now + LOOP_COUNTER_LOG_INTERVAL;
+
+      for (int page = 0; page < 8; page++){
+        // for (int i = 0; i < (2*DAC_DMA_BUFFER_SIZE)*2; i++) {
+
+      oled_data[page][0] = 0x40; // 0x40 = following bytes are display data
+      // for (int i = 1; i < 129; i++)
+      //     oled_data[page][i] = 0x00;
+        OLED_Command(0xB0 + page, OLED1_ADDR);
+        OLED_Command(0x00, OLED1_ADDR);
+        OLED_Command(0x10, OLED1_ADDR);
+        
+        // }
+        HAL_I2C_Master_Transmit(
+          &hi2c1,
+          OLED1_ADDR,
+          oled_data[page],
+          129,
+          HAL_MAX_DELAY
+        );
+      }
+      // is_oled_rendering = false;
     }
 
     loop_counter++;
