@@ -302,7 +302,17 @@ void OLED_Init(uint16_t address)
 
 uint16_t load_dac_buffer[4*DAC_DMA_BUFFER_SIZE] = {0}; // 4*32=128 fits the oled resolution nicely
 // uint16_t load_dac_buffer_index = 0;
-uint8_t oled_data[8][129] = {0b00000000};
+// uint8_t oled_data[8][129] = {0b00000000};
+uint8_t oled_data[8][129] = { // 0x40 = following bytes are display data
+    {0x40},
+    {0x40},
+    {0x40},
+    {0x40},
+    {0x40},
+    {0x40},
+    {0x40},
+    {0x40}
+};
 uint32_t render_oled_count = 0;
 typedef enum{
     FILL_FIRST_QUARTER_OF_BUFFER,
@@ -317,8 +327,15 @@ void render_oled(void){
   render_oled_count++;
 
   // clear oled data first
-  for (int i = 0; i < 8*129; i++) {
-      ((uint8_t*)oled_data)[i] = 0;
+  // for (int i = 0; i < 8*129; i++) {
+  //     // set all to 0
+  //     ((uint8_t*)oled_data)[i] = 0;
+  // }
+  for (int page = 0; page < 8; page++) {
+    for (int i = 1; i < 129; i++) {
+      // skip index 0 of each column
+      oled_data[page][i] = 0;
+    }
   }
 
   // fill with new data
@@ -334,9 +351,8 @@ void render_oled(void){
   }
 
   // send i2c command to oled
-  for (int page = 0; page < 8; page++){
-
-    oled_data[page][0] = 0x40; // 0x40 = following bytes are display data
+  for (volatile int page = 0; page < 8; page++){
+    // oled_data[page][0] = 0x40;
     OLED_Command(0xB0 + page, OLED1_ADDR);
     OLED_Command(0x00, OLED1_ADDR);
     OLED_Command(0x10, OLED1_ADDR);
@@ -350,8 +366,8 @@ void render_oled(void){
     );
   }
 
-  // // curr_render_step = FILL_FIRST_QUARTER_OF_BUFFER; // done rendering, ready to update the buffer
-  curr_render_step = STOP_RENDER; // done rendering, ready to update the buffer
+  curr_render_step = FILL_FIRST_QUARTER_OF_BUFFER; // done rendering, ready to update the buffer
+  // curr_render_step = STOP_RENDER; // done rendering, ready to update the buffer
 }
 
 // OLED TEST
@@ -379,7 +395,6 @@ inline void HAL_DAC_ConvHalfCpltCallbackCh1(DAC_HandleTypeDef *hdac)
 inline void HAL_DAC_ConvCpltCallbackCh1(DAC_HandleTypeDef *hdac)
 {
   do_dac(&dac_dma_buffer[DAC_DMA_BUFFER_SIZE]); // fill second half of buffer
-  // render_oled(); // call once buffer is full
   switch (curr_render_step) {
     case FILL_SECOND_QUARTER_OF_BUFFER:
       for (int i = DAC_DMA_BUFFER_SIZE; i < 2*DAC_DMA_BUFFER_SIZE; i++) {
@@ -573,9 +588,9 @@ int main(void)
     // log loop counter
     if (now >= next_loop_counter_log) {
       printf("loop_counter: %lu\n", loop_counter);
-      printf("render_oled_count: %lu\n", render_oled_count);
+      // printf("render_oled_count: %lu\n", render_oled_count);
       loop_counter = 0;
-      render_oled_count = 0;
+      // render_oled_count = 0;
       next_loop_counter_log = now + LOOP_COUNTER_LOG_INTERVAL;
 
       if (curr_render_step == START_RENDER) render_oled();
