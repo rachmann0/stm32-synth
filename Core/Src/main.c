@@ -300,8 +300,9 @@ void OLED_Init(uint16_t address)
   OLED_Command(0xAF, address); // Display ON
 }
 
-uint16_t load_dac_buffer[4*DAC_DMA_BUFFER_SIZE] = {0}; // 4*32=128 fits the oled resolution nicely
-// uint16_t load_dac_buffer_index = 0;
+#define WAVEFORM_CYCLE_COUNT 4
+#define LOAD_DAC_BUFFER_SIZE DAC_DMA_BUFFER_SIZE*WAVEFORM_CYCLE_COUNT
+uint16_t load_dac_buffer[LOAD_DAC_BUFFER_SIZE] = {0}; // 4*32=128 fits the oled resolution nicely
 // uint8_t oled_data[8][129] = {0b00000000};
 uint8_t oled_data[8][129] = { // 0x40 = following bytes are display data
     {0x40},
@@ -323,6 +324,7 @@ typedef enum{
     STOP_RENDER,
 } RenderStep; // keeps track which step of the render is the system currently doing
 volatile RenderStep curr_render_step = FILL_FIRST_QUARTER_OF_BUFFER;
+volatile uint16_t curr_waveform_cycle = 0;
 void render_oled(void){
   render_oled_count++;
 
@@ -338,10 +340,18 @@ void render_oled(void){
     }
   }
 
-  // fill with new data
-  for (int i = 1; i < (4*DAC_DMA_BUFFER_SIZE); i++) {
-    // map to oled_data
+  uint16_t max_dac_value = 0;
+  for (int i = 1; i < LOAD_DAC_BUFFER_SIZE; i++){
     uint16_t value = load_dac_buffer[i];
+    if (value > max_dac_value) max_dac_value = value;
+  }
+  if (max_dac_value>4095) max_dac_value = 4095;
+  uint16_t translate_y = (OUTPUT_MID-(max_dac_value)/2);
+
+  // fill with new data
+  for (int i = 1; i < LOAD_DAC_BUFFER_SIZE; i++) {
+    // map to oled_data
+    uint16_t value = load_dac_buffer[i]+translate_y;
     // clamp DAC value to avoid HardFault
     if (value > 4095) value = 4095;
     else if (value < 0) value = 0;
@@ -353,8 +363,8 @@ void render_oled(void){
     oled_data[y / 8][i] = 1 << (y%8);
 
     // connect curr pixel to next pixel
-    if (i+1==(4*DAC_DMA_BUFFER_SIZE)) break;
-    uint16_t value_next = load_dac_buffer[i-1];
+    if (i+1==LOAD_DAC_BUFFER_SIZE) break;
+    uint16_t value_next = load_dac_buffer[i-1]+translate_y;
     // clamp value again here
     if (value_next > 4095) value_next = 4095;
     if (value_next < 0) value_next = 0;
@@ -412,71 +422,40 @@ void render_oled(void){
     );
   }
 
-  curr_render_step = FILL_FIRST_QUARTER_OF_BUFFER; // done rendering, ready to update the buffer
+  // curr_render_step = FILL_FIRST_QUARTER_OF_BUFFER; // done rendering, ready to update the buffer
   // curr_render_step = STOP_RENDER; // done rendering, ready to update the buffer
+  curr_waveform_cycle %= WAVEFORM_CYCLE_COUNT;
 }
 
 // OLED TEST
 static void copy_dac_buffer(void){
-  // for (int i = 0; i < DAC_DMA_BUFFER_SIZE; i++) {
-  //   load_dac_buffer[i] = dac_dma_buffer[i];
-  // }
-
-  switch (curr_render_step) {
-    case FILL_FIRST_QUARTER_OF_BUFFER:
-      for (int i = 0; i < DAC_DMA_BUFFER_SIZE; i++) {
-        load_dac_buffer[i] = dac_dma_buffer[i];
-      }
-      break;
-    case FILL_SECOND_QUARTER_OF_BUFFER:
-      for (int i = DAC_DMA_BUFFER_SIZE; i < 2*DAC_DMA_BUFFER_SIZE; i++) {
-        load_dac_buffer[i] = dac_dma_buffer[i];
-      }
-      break;
-    case FILL_THIRD_QUARTER_OF_BUFFER:
-      for (int i = 0; i < DAC_DMA_BUFFER_SIZE; i++) {
-        load_dac_buffer[i+2*DAC_DMA_BUFFER_SIZE] = dac_dma_buffer[i];
-      }
-      break;
-    case FILL_FOURTH_QUARTER_OF_BUFFER:
-      for (int i = DAC_DMA_BUFFER_SIZE; i < 2*DAC_DMA_BUFFER_SIZE; i++) {
-        load_dac_buffer[i+2*DAC_DMA_BUFFER_SIZE] = dac_dma_buffer[i];
-      }
-      break;
-    default:
-      return;
+  if (curr_waveform_cycle >= WAVEFORM_CYCLE_COUNT) return;
+  if (curr_waveform_cycle%2==0) {
+    for (int i = 0; i < DAC_DMA_BUFFER_SIZE; i++) {
+      load_dac_buffer[i+((curr_waveform_cycle/2)*(2*DAC_DMA_BUFFER_SIZE))] = dac_dma_buffer[i];
+    }
+  } else {
+    for (int i = DAC_DMA_BUFFER_SIZE; i < 2*DAC_DMA_BUFFER_SIZE; i++) {
+      load_dac_buffer[i+((curr_waveform_cycle/2)*(2*DAC_DMA_BUFFER_SIZE))] = dac_dma_buffer[i];
+    }
   }
-  curr_render_step++;
-}
+  // printf("curr_waveform_cycle: %u\n", curr_waveform_cycle);
+  curr_waveform_cycle++;
 
-inline void HAL_DAC_ConvHalfCpltCallbackCh1(DAC_HandleTypeDef *hdac)
-{
-  do_dac(&dac_dma_buffer[0]); // fill first half of buffer
-  copy_dac_buffer();
   // switch (curr_render_step) {
   //   case FILL_FIRST_QUARTER_OF_BUFFER:
   //     for (int i = 0; i < DAC_DMA_BUFFER_SIZE; i++) {
   //       load_dac_buffer[i] = dac_dma_buffer[i];
   //     }
   //     break;
-  //   case FILL_THIRD_QUARTER_OF_BUFFER:
-  //     for (int i = 0; i < DAC_DMA_BUFFER_SIZE; i++) {
-  //       load_dac_buffer[i+2*DAC_DMA_BUFFER_SIZE] = dac_dma_buffer[i];
-  //     }
-  //     break;
-  //   default:
-  //     return;
-  // }
-  // curr_render_step++; // start render
-}
-inline void HAL_DAC_ConvCpltCallbackCh1(DAC_HandleTypeDef *hdac)
-{
-  do_dac(&dac_dma_buffer[DAC_DMA_BUFFER_SIZE]); // fill second half of buffer
-  copy_dac_buffer();
-  // switch (curr_render_step) {
   //   case FILL_SECOND_QUARTER_OF_BUFFER:
   //     for (int i = DAC_DMA_BUFFER_SIZE; i < 2*DAC_DMA_BUFFER_SIZE; i++) {
   //       load_dac_buffer[i] = dac_dma_buffer[i];
+  //     }
+  //     break;
+  //   case FILL_THIRD_QUARTER_OF_BUFFER:
+  //     for (int i = 0; i < DAC_DMA_BUFFER_SIZE; i++) {
+  //       load_dac_buffer[i+2*DAC_DMA_BUFFER_SIZE] = dac_dma_buffer[i];
   //     }
   //     break;
   //   case FILL_FOURTH_QUARTER_OF_BUFFER:
@@ -487,7 +466,18 @@ inline void HAL_DAC_ConvCpltCallbackCh1(DAC_HandleTypeDef *hdac)
   //   default:
   //     return;
   // }
-  // curr_render_step++; // start render
+  // curr_render_step++;
+}
+
+inline void HAL_DAC_ConvHalfCpltCallbackCh1(DAC_HandleTypeDef *hdac)
+{
+  do_dac(&dac_dma_buffer[0]); // fill first half of buffer
+  copy_dac_buffer();
+}
+inline void HAL_DAC_ConvCpltCallbackCh1(DAC_HandleTypeDef *hdac)
+{
+  do_dac(&dac_dma_buffer[DAC_DMA_BUFFER_SIZE]); // fill second half of buffer
+  copy_dac_buffer();
 }
 
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc){
@@ -674,7 +664,8 @@ int main(void)
       // if (curr_render_step == START_RENDER) render_oled();
     }
     // render_oled();
-    if (curr_render_step == START_RENDER) render_oled();
+    // if (curr_render_step == START_RENDER) render_oled();
+    if (curr_waveform_cycle == WAVEFORM_CYCLE_COUNT) render_oled();
 
     loop_counter++;
     
