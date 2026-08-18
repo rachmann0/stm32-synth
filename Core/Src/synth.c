@@ -126,26 +126,27 @@ float oscillator_process(Oscillator *osc)
     float sample = 0.0f;
     // NO sqrtf() IT CAN CAUSE real-time deadline misses, because it is a slow function, and we are in an interrupt context
     // float gain = 1.0f/sqrtf(osc->chord+1);
-    // float gain = 1.0f/(osc->chord+1);
-    float gain = 0.0f;
-    switch(osc1.chord)
-    {
-        case 0:
-            gain = 1.0f;
-            break;
-        case 1:
-            gain = 0.707f;
-            break;
-        case 2:
-            gain = 0.577f;
-            break;
-        case 3:
-            gain = 0.5f;
-            break;
-        case 4:
-            gain = 0.447f;
-            break;
-    }
+    float gain = 1.0f/(osc->chord+1); // use this for now to avoid clipping
+
+    // float gain = 0.0f;
+    // switch(osc1.chord)
+    // {
+    //     case 0:
+    //         gain = 1.0f;
+    //         break;
+    //     case 1:
+    //         gain = 0.707f;
+    //         break;
+    //     case 2:
+    //         gain = 0.577f;
+    //         break;
+    //     case 3:
+    //         gain = 0.5f;
+    //         break;
+    //     case 4:
+    //         gain = 0.447f;
+    //         break;
+    // }
 
     // root note
     sample += wave*gain;

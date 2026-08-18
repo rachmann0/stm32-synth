@@ -342,6 +342,9 @@ void render_oled(void){
   for (int i = 1; i < (4*DAC_DMA_BUFFER_SIZE); i++) {
     // map to oled_data
     uint16_t value = load_dac_buffer[i];
+    // clamp DAC value to avoid HardFault
+    if (value > 4095) value = 4095;
+    else if (value < 0) value = 0;
     // uint8_t y = 63-(value * 63 / 4095); // map 0-4095 dac value to 0-63 oled y axis
     uint8_t y = 63-(value >> 6); // just slightly more optimized, sacrificing accuracy for the edges of the mapping
     // uint16_t page = y / 8; // determine page based on mapped y
@@ -352,6 +355,9 @@ void render_oled(void){
     // connect curr pixel to next pixel
     if (i+1==(4*DAC_DMA_BUFFER_SIZE)) break;
     uint16_t value_next = load_dac_buffer[i-1];
+    // clamp value again here
+    if (value_next > 4095) value_next = 4095;
+    if (value_next < 0) value_next = 0;
     uint8_t y_next = 63-(value_next >> 6);
     int16_t difference = (int16_t)y-(int16_t)y_next;
 
