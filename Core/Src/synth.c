@@ -48,7 +48,7 @@ void oscillator_init(Oscillator *osc, float freq, float amp)
     // osc->waveform = SAWTOOTH;
     // osc->waveform = SINE;
     // osc->waveform = TRIANGLE;
-    osc->chord = 0;
+    osc->chord = 1;
 }
 
 #define TABLE_BITS 10 // for 1024 sine table entries, 2^10 = 1024
