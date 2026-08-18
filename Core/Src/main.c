@@ -339,7 +339,8 @@ void render_oled(void){
   }
 
   // fill with new data
-  for (int i = 1; i < (4*DAC_DMA_BUFFER_SIZE); i++) {
+  // for (int i = 1; i < (4*DAC_DMA_BUFFER_SIZE); i++) {
+  for (int i = (4*DAC_DMA_BUFFER_SIZE)-1; i > 0; i--) {
     // map to oled_data
     uint16_t value = load_dac_buffer[i];
     // uint8_t y = value * 63 / 4095; // map 0-4095 dac value to 0-63 oled y axis
@@ -348,6 +349,28 @@ void render_oled(void){
     // uint8_t command = 1 << (y%8); // 2**(8-value mod 8)
     // oled_data[page][i] = command;
     oled_data[y / 8][i] = 1 << (y%8);
+
+    // connect curr pixel to next pixel
+    // if (i+1==(4*DAC_DMA_BUFFER_SIZE)) break;
+    if (i-1==0) break;
+    uint16_t value_next = load_dac_buffer[i-1];
+    uint8_t y_next = value_next >> 6;
+    int16_t difference = y-y_next;
+
+    if (difference>1) { // y > y_next
+      oled_data[y / 8][i] = (uint8_t)~0 >> (7-(y%8));
+      for (int page = 1; page < difference/8+1; page++) {
+        oled_data[(y/8)-page][i] = (~0);
+      }
+      // oled_data[y_next / 8][i] &= (uint8_t)~0 << (y_next%8);
+      oled_data[y_next / 8][i] &= (uint8_t)~0 << (y_next%8);
+    } else if (difference<-1) { // y < y_next
+      oled_data[y / 8][i] = (uint8_t)~0 << (y%8);
+      for (int page = 1; page < -difference/8+1; page++) {
+        oled_data[(y/8)+page][i] = (~0);
+      }
+      oled_data[y_next / 8][i] &= (uint8_t)~0 >> (7-(y_next%8));
+    }
   }
 
   // send i2c command to oled
@@ -371,34 +394,25 @@ void render_oled(void){
 }
 
 // OLED TEST
+static void copy_dac_buffer(void){
+  // for (int i = 0; i < DAC_DMA_BUFFER_SIZE; i++) {
+  //   load_dac_buffer[i] = dac_dma_buffer[i];
+  // }
 
-inline void HAL_DAC_ConvHalfCpltCallbackCh1(DAC_HandleTypeDef *hdac)
-{
-  do_dac(&dac_dma_buffer[0]); // fill first half of buffer
-  // copy_dac_buffer();
   switch (curr_render_step) {
     case FILL_FIRST_QUARTER_OF_BUFFER:
       for (int i = 0; i < DAC_DMA_BUFFER_SIZE; i++) {
         load_dac_buffer[i] = dac_dma_buffer[i];
       }
       break;
-    case FILL_THIRD_QUARTER_OF_BUFFER:
-      for (int i = 0; i < DAC_DMA_BUFFER_SIZE; i++) {
-        load_dac_buffer[i+2*DAC_DMA_BUFFER_SIZE] = dac_dma_buffer[i];
-      }
-      break;
-    default:
-      return;
-  }
-  curr_render_step++; // start render
-}
-inline void HAL_DAC_ConvCpltCallbackCh1(DAC_HandleTypeDef *hdac)
-{
-  do_dac(&dac_dma_buffer[DAC_DMA_BUFFER_SIZE]); // fill second half of buffer
-  switch (curr_render_step) {
     case FILL_SECOND_QUARTER_OF_BUFFER:
       for (int i = DAC_DMA_BUFFER_SIZE; i < 2*DAC_DMA_BUFFER_SIZE; i++) {
         load_dac_buffer[i] = dac_dma_buffer[i];
+      }
+      break;
+    case FILL_THIRD_QUARTER_OF_BUFFER:
+      for (int i = 0; i < DAC_DMA_BUFFER_SIZE; i++) {
+        load_dac_buffer[i+2*DAC_DMA_BUFFER_SIZE] = dac_dma_buffer[i];
       }
       break;
     case FILL_FOURTH_QUARTER_OF_BUFFER:
@@ -409,7 +423,48 @@ inline void HAL_DAC_ConvCpltCallbackCh1(DAC_HandleTypeDef *hdac)
     default:
       return;
   }
-  curr_render_step++; // start render
+  curr_render_step++;
+}
+
+inline void HAL_DAC_ConvHalfCpltCallbackCh1(DAC_HandleTypeDef *hdac)
+{
+  do_dac(&dac_dma_buffer[0]); // fill first half of buffer
+  copy_dac_buffer();
+  // switch (curr_render_step) {
+  //   case FILL_FIRST_QUARTER_OF_BUFFER:
+  //     for (int i = 0; i < DAC_DMA_BUFFER_SIZE; i++) {
+  //       load_dac_buffer[i] = dac_dma_buffer[i];
+  //     }
+  //     break;
+  //   case FILL_THIRD_QUARTER_OF_BUFFER:
+  //     for (int i = 0; i < DAC_DMA_BUFFER_SIZE; i++) {
+  //       load_dac_buffer[i+2*DAC_DMA_BUFFER_SIZE] = dac_dma_buffer[i];
+  //     }
+  //     break;
+  //   default:
+  //     return;
+  // }
+  // curr_render_step++; // start render
+}
+inline void HAL_DAC_ConvCpltCallbackCh1(DAC_HandleTypeDef *hdac)
+{
+  do_dac(&dac_dma_buffer[DAC_DMA_BUFFER_SIZE]); // fill second half of buffer
+  copy_dac_buffer();
+  // switch (curr_render_step) {
+  //   case FILL_SECOND_QUARTER_OF_BUFFER:
+  //     for (int i = DAC_DMA_BUFFER_SIZE; i < 2*DAC_DMA_BUFFER_SIZE; i++) {
+  //       load_dac_buffer[i] = dac_dma_buffer[i];
+  //     }
+  //     break;
+  //   case FILL_FOURTH_QUARTER_OF_BUFFER:
+  //     for (int i = DAC_DMA_BUFFER_SIZE; i < 2*DAC_DMA_BUFFER_SIZE; i++) {
+  //       load_dac_buffer[i+2*DAC_DMA_BUFFER_SIZE] = dac_dma_buffer[i];
+  //     }
+  //     break;
+  //   default:
+  //     return;
+  // }
+  // curr_render_step++; // start render
 }
 
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc){
