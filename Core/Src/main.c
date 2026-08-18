@@ -338,15 +338,12 @@ void render_oled(void){
     }
   }
 
-  uint16_t y_greater_than_y_next_count = 0;
-  uint16_t y_less_than_y_next_count = 0;
   // fill with new data
   for (int i = 1; i < (4*DAC_DMA_BUFFER_SIZE); i++) {
-  // for (int i = (4*DAC_DMA_BUFFER_SIZE)-1; i > 0; i--) {
     // map to oled_data
     uint16_t value = load_dac_buffer[i];
     // uint8_t y = 63-(value * 63 / 4095); // map 0-4095 dac value to 0-63 oled y axis
-    uint8_t y = 64-(value >> 6); // just slightly more optimized, sacrificing accuracy for the edges of the mapping
+    uint8_t y = 63-(value >> 6); // just slightly more optimized, sacrificing accuracy for the edges of the mapping
     // uint16_t page = y / 8; // determine page based on mapped y
     // uint8_t command = 1 << (y%8); // 2**(8-value mod 8)
     // oled_data[page][i] = command;
@@ -354,13 +351,11 @@ void render_oled(void){
 
     // connect curr pixel to next pixel
     if (i+1==(4*DAC_DMA_BUFFER_SIZE)) break;
-    // if (i-1==0) break;
     uint16_t value_next = load_dac_buffer[i-1];
-    uint8_t y_next = 64-(value_next >> 6);
-    int16_t difference = y-y_next;
+    uint8_t y_next = 63-(value_next >> 6);
+    int16_t difference = (int16_t)y-(int16_t)y_next;
 
     if (difference>1) { // y > y_next
-      y_greater_than_y_next_count++;
       oled_data[y / 8][i] = (uint8_t)~0 >> (7-(y%8));
       for (int page = 1; page < difference/8+1; page++) {
         oled_data[(y/8)-page][i] = (~0);
@@ -371,7 +366,6 @@ void render_oled(void){
         oled_data[y_next / 8][i] = (uint8_t)~0 << (y_next%8);
       }
     } else if (difference<-1) { // y < y_next
-      y_less_than_y_next_count++;
       oled_data[y / 8][i] = (uint8_t)~0 << (y%8);
       for (int page = 1; page < -difference/8+1; page++) {
         oled_data[(y/8)+page][i] = (~0);
@@ -382,9 +376,19 @@ void render_oled(void){
         oled_data[y_next / 8][i] = (uint8_t)~0 >> (7-(y_next%8));
       }
     }
+
+    // if (difference > 1) {
+    //   for (int yy = y_next; yy <= y; yy++) {
+    //       oled_data[yy / 8][i] |= (uint8_t)1 << (yy % 8);
+    //   }
+    // } else if (difference < -1) {
+    //   for (int yy = y; yy <= y_next; yy++) {
+    //       oled_data[yy / 8][i] |= (uint8_t)1 << (yy % 8);
+    //   }
+    // }
+
   }
-  printf("y_greater_than_y_next_count: %u\n", y_greater_than_y_next_count);
-  printf("y_less_than_y_next_count: %u\n", y_less_than_y_next_count);
+  
 
   // send i2c command to oled
   for (volatile int page = 0; page < 8; page++){
@@ -602,7 +606,7 @@ int main(void)
 
   uint32_t loop_counter = 0;
   uint32_t now = HAL_GetTick();
-  #define LOOP_COUNTER_LOG_INTERVAL 3000
+  #define LOOP_COUNTER_LOG_INTERVAL 1000
   uint32_t next_loop_counter_log = now + LOOP_COUNTER_LOG_INTERVAL;
 
   /* USER CODE END 2 */
@@ -656,13 +660,15 @@ int main(void)
     // log loop counter
     if (now >= next_loop_counter_log) {
       // printf("loop_counter: %lu\n", loop_counter);
-      // printf("render_oled_count: %lu\n", render_oled_count);
+      printf("render_oled_count: %lu\n", render_oled_count);
       // loop_counter = 0;
-      // render_oled_count = 0;
+      render_oled_count = 0;
       next_loop_counter_log = now + LOOP_COUNTER_LOG_INTERVAL;
 
-      if (curr_render_step == START_RENDER) render_oled();
+      // if (curr_render_step == START_RENDER) render_oled();
     }
+    // render_oled();
+    if (curr_render_step == START_RENDER) render_oled();
 
     loop_counter++;
     
