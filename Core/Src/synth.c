@@ -44,9 +44,9 @@ void oscillator_init(Oscillator *osc, float freq, float amp)
 
     osc->amplitude = amp;
 
-    // osc->waveform = SQUARE;
+    osc->waveform = SQUARE;
     // osc->waveform = SAWTOOTH;
-    osc->waveform = SINE;
+    // osc->waveform = SINE;
     // osc->waveform = TRIANGLE;
     osc->chord = 0;
     // osc->chord = 1;

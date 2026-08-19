@@ -300,7 +300,7 @@ void OLED_Init(uint16_t address)
   OLED_Command(0xAF, address); // Display ON
 }
 
-#define WAVEFORM_CYCLE_COUNT 4
+#define WAVEFORM_CYCLE_COUNT 5
 #define LOAD_DAC_BUFFER_SIZE DAC_DMA_BUFFER_SIZE*WAVEFORM_CYCLE_COUNT
 uint16_t load_dac_buffer[LOAD_DAC_BUFFER_SIZE] = {0}; // 4*32=128 fits the oled resolution nicely
 // uint8_t oled_data[8][129] = {0b00000000};
@@ -320,10 +320,6 @@ void render_oled(void){
   render_oled_count++;
 
   // clear oled data first
-  // for (int i = 0; i < 8*129; i++) {
-  //     // set all to 0
-  //     ((uint8_t*)oled_data)[i] = 0;
-  // }
   for (int page = 0; page < 8; page++) {
     for (int i = 1; i < 129; i++) {
       // skip index 0 of each column
@@ -348,52 +344,47 @@ void render_oled(void){
     else if (value < 0) value = 0;
     uint8_t y = 63-(value >> 6); // just slightly more optimized, sacrificing accuracy for the edges of the mapping
     uint16_t x = i*((float)127/(LOAD_DAC_BUFFER_SIZE-1))+1; // map LOAD_DAC_BUFFER_SIZE to 128 pixels
-    // uint16_t x = i+1;
-    oled_data[y / 8][x] = 1 << (y%8);
+    oled_data[y / 8][x] |= 1 << (y%8);
+    /*
+    !IMPORTANT LESSON!
+    (|=) is important instead of just (=) because if LOAD_DAC_BUFFER_SIZE is greater than the oled width (128),
+    then the mapping becomes compressed and multiple iterations can hit the same x in oled[page][x] and overwrite the previous iteration
+    */
 
     // connect curr pixel to next pixel
-    // if (i+1==LOAD_DAC_BUFFER_SIZE) break;
-    // uint16_t value_next = load_dac_buffer[i-1]+translate_y;
-    // // clamp value again here
-    // if (value_next > 4095) value_next = 4095;
-    // if (value_next < 0) value_next = 0;
-    // uint8_t y_next = 63-(value_next >> 6);
-    // int16_t difference = (int16_t)y-(int16_t)y_next;
+    if (i+1==LOAD_DAC_BUFFER_SIZE) break;
+    uint16_t value_next = load_dac_buffer[i+1]+translate_y;
+    // clamp value again here
+    if (value_next > 4095) value_next = 4095;
+    if (value_next < 0) value_next = 0;
+    uint8_t y_next = 63-(value_next >> 6);
+    int16_t difference = (int16_t)y-(int16_t)y_next;
 
-    // if (difference>1) { // y > y_next
-    //   oled_data[y / 8][i] = (uint8_t)~0 >> (7-(y%8));
-    //   for (int page = 1; page < difference/8+1; page++) {
-    //     oled_data[(y/8)-page][i] = (~0);
-    //   }
-    //   if(y/8==y_next/8){
-    //     oled_data[y_next / 8][i] &= (uint8_t)~0 << (y_next%8);
-    //   } else {
-    //     oled_data[y_next / 8][i] = (uint8_t)~0 << (y_next%8);
-    //   }
-    // } else if (difference<-1) { // y < y_next
-    //   oled_data[y / 8][i] = (uint8_t)~0 << (y%8);
-    //   for (int page = 1; page < -difference/8+1; page++) {
-    //     oled_data[(y/8)+page][i] = (~0);
-    //   }
-    //   if (y/8==y_next/8) {
-    //     oled_data[y_next / 8][i] &= (uint8_t)~0 >> (7-(y_next%8));
-    //   } else {
-    //     oled_data[y_next / 8][i] = (uint8_t)~0 >> (7-(y_next%8));
-    //   }
-    // }
+    if (difference>1) { // y > y_next
+      oled_data[y / 8][x] = (uint8_t)~0 >> (7-(y%8));
+      for (int page = 1; page < difference/8+1; page++) {
+        oled_data[(y/8)-page][x] = (~0);
+      }
+      if(y/8==y_next/8){
+        oled_data[y_next / 8][x] &= (uint8_t)~0 << (y_next%8);
+      } else {
+        oled_data[y_next / 8][x] = (uint8_t)~0 << (y_next%8);
+      }
+    } else if (difference<-1) { // y < y_next
+      oled_data[y / 8][x] = (uint8_t)~0 << (y%8);
+      for (int page = 1; page < -difference/8+1; page++) {
+        oled_data[(y/8)+page][x] = (~0);
+      }
+      if (y/8==y_next/8) {
+        oled_data[y_next / 8][x] &= (uint8_t)~0 >> (7-(y_next%8));
+      } else {
+        oled_data[y_next / 8][x] = (uint8_t)~0 >> (7-(y_next%8));
+      }
+    } else {
+    }
 
-    // if (difference > 1) {
-    //   for (int yy = y_next; yy <= y; yy++) {
-    //       oled_data[yy / 8][i] |= (uint8_t)1 << (yy % 8);
-    //   }
-    // } else if (difference < -1) {
-    //   for (int yy = y; yy <= y_next; yy++) {
-    //       oled_data[yy / 8][i] |= (uint8_t)1 << (yy % 8);
-    //   }
-    // }
+  }   
 
-  }
-  
   // send i2c command to oled
   for (volatile int page = 0; page < 8; page++){
     // oled_data[page][0] = 0x40;
@@ -614,17 +605,16 @@ int main(void)
 
     // log loop counter
     if (now >= next_loop_counter_log) {
-      // printf("loop_counter: %lu\n", loop_counter);
+      printf("loop_counter: %lu\n", loop_counter);
       printf("render_oled_count: %lu\n", render_oled_count);
-      // loop_counter = 0;
+      loop_counter = 0;
       render_oled_count = 0;
       next_loop_counter_log = now + LOOP_COUNTER_LOG_INTERVAL;
 
-      // if (curr_render_step == START_RENDER) render_oled();
+      // if (curr_waveform_cycle == WAVEFORM_CYCLE_COUNT) render_oled();
     }
-    // render_oled();
-    // if (curr_render_step == START_RENDER) render_oled();
     if (curr_waveform_cycle == WAVEFORM_CYCLE_COUNT) render_oled();
+    // render_oled();
 
     loop_counter++;
     
