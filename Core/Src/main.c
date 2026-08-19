@@ -300,7 +300,7 @@ void OLED_Init(uint16_t address)
   OLED_Command(0xAF, address); // Display ON
 }
 
-#define WAVEFORM_CYCLE_COUNT 5
+#define WAVEFORM_CYCLE_COUNT 12
 #define LOAD_DAC_BUFFER_SIZE DAC_DMA_BUFFER_SIZE*WAVEFORM_CYCLE_COUNT
 uint16_t load_dac_buffer[LOAD_DAC_BUFFER_SIZE] = {0}; // 4*32=128 fits the oled resolution nicely
 // uint8_t oled_data[8][129] = {0b00000000};
@@ -572,19 +572,19 @@ int main(void)
 
     if(is_WAVE_FORM_btn_pressed) {
       is_WAVE_FORM_btn_pressed = 0;
-      BSP_LED_Toggle(LED2); // toggle led using BSP function
+      // BSP_LED_Toggle(LED2); // toggle led using BSP function
       iter_OSC1_waveform();
     }
     if(is_OSC2_btn_pressed) {
       is_OSC2_btn_pressed = 0;
-      BSP_LED_Toggle(LED2); // toggle led using BSP function
+      // BSP_LED_Toggle(LED2); // toggle led using BSP function
       // toggle_OSC2();
       iter_chord();
     }
 
     if (is_blue_button_pressed) {
       is_blue_button_pressed = 0;
-      BSP_LED_Toggle(LED2); // toggle led using BSP function
+      // BSP_LED_Toggle(LED2); // toggle led using BSP function
       // printf("Button pressed!\n");
 
       // toggle timer6
