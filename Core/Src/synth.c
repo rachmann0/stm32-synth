@@ -1,5 +1,11 @@
+#include "main.h"
 #include "synth.h"
 #include <math.h>
+#include <stdint.h>
+
+#include <stdio.h>
+
+#include "app_state.h"
 
 // SINE TABLE
 #define SINE_TABLE_SIZE 1024
@@ -39,14 +45,16 @@ void oscillator_init(Oscillator *osc, float freq, float amp)
     osc->phase4 = 0;
     osc->phase5 = 0;
 
-    osc->phase_increment =
-        (uint32_t)((freq * 4294967296.0) / SAMPLE_RATE); // 4294967296.0 is 2^32
+    // osc->phase_increment =
+    //     (uint32_t)((freq * 4294967296.0) / SAMPLE_RATE); // 4294967296.0 is 2^32
+    
+    set_osc1_freq(freq);
 
     osc->amplitude = amp;
 
-    osc->waveform = SQUARE;
+    // osc->waveform = SQUARE;
     // osc->waveform = SAWTOOTH;
-    // osc->waveform = SINE;
+    osc->waveform = SINE;
     // osc->waveform = TRIANGLE;
     osc->chord = 0;
     // osc->chord = 1;
@@ -203,9 +211,18 @@ void set_osc1_freq(float freq)
     osc1.phase_increment = (uint32_t)((freq * 4294967296.0) / SAMPLE_RATE);
 }
 
-float synth_process(void)
+float synth_process(uint16_t curr_buffer_idx)
 {
     float sample = 0.0f;
+
+    uint32_t next_phase = osc1.phase + osc1.phase_increment;
+    if (next_phase < osc1.phase) {
+    // if (osc1.phase < 2147483648 && next_phase > 2147483648){
+    // if (4204967296 < osc1.phase && osc1.phase < 4294967296) {
+        // phase_trigger_index = curr_buffer_idx;
+        // printf("next_phase: %lu\n", next_phase);
+        // printf("osc1.phase: %lu\n", osc1.phase);
+    }
 
     sample += oscillator_process(&osc1);
     // sample += oscillator_process(&osc2);

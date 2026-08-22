@@ -27,6 +27,7 @@
 #include <stdbool.h>
 
 #include "synth.h"
+#include "app_state.h"
 
 /* USER CODE END Includes */
 
@@ -90,7 +91,8 @@ uint16_t adc_dma_buffer[2 * ADC_DMA_BUFFER_SIZE];
 volatile float adc_values[NUM_ADC_CHANNELS];
 
 // synth effects parameters
-volatile float volume = 0.05f;
+// volatile float volume = 0.05f;
+volatile float volume = 1.0f;
 volatile float pitch = 1.0f;
 
 // twice the dma buffer cuz we use circular mode
@@ -192,9 +194,9 @@ static inline void do_dac(uint16_t *buffer){
   float amplitude = OUTPUT_MID * 0.9f; // 90% of the DAC range, to avoid clipping
 
   // update volume
-  volume = (float) adc_values[0] / (ADC_RESOLUTION); // scale to 0.0 - 1.0
-  pitch = (float) adc_values[1] / (ADC_RESOLUTION); // scale to 0.0 - 1.0
-  set_osc1_freq(440.0f * pitch); // update frequency of osc1 based on adc value
+  // volume = (float) adc_values[0] / (ADC_RESOLUTION); // scale to 0.0 - 1.0
+  // pitch = (float) adc_values[1] / (ADC_RESOLUTION); // scale to 0.0 - 1.0
+  // set_osc1_freq(440.0f * pitch); // update frequency of osc1 based on adc value
 
   // update pitch
 
@@ -207,10 +209,16 @@ static inline void do_dac(uint16_t *buffer){
     // float wave = 2.0f * (phase / 4294967296.0f) - 1.0f; // phase is a uint32_t, so it wraps around at 2^32, which is 4294967296
 
     // float sample = wave * amplitude;
-    float sample = synth_process() * amplitude;
+    float sample = synth_process(i) * amplitude;
 
     // buffer[i] = OUTPUT_MID + amplitude * wave;
     buffer[i] = OUTPUT_MID + sample;
+    if (i>1 && buffer[i-1]<OUTPUT_MID&&OUTPUT_MID>buffer[i]) {
+      phase_trigger_index = i;
+    }
+    // if (i>1 && dac_dma_buffer[i - 1] < OUTPUT_MID && dac_dma_buffer[i] >= OUTPUT_MID) {
+    //   is_load_dac_buffer_triggered = true;
+    // }
     apply_effects(&buffer[i]);
 
     // increment phase
@@ -303,6 +311,8 @@ void OLED_Init(uint16_t address)
 #define WAVEFORM_CYCLE_COUNT 12
 #define LOAD_DAC_BUFFER_SIZE DAC_DMA_BUFFER_SIZE*WAVEFORM_CYCLE_COUNT
 uint16_t load_dac_buffer[LOAD_DAC_BUFFER_SIZE] = {0}; // 4*32=128 fits the oled resolution nicely
+uint16_t curr_load_dac_buffer_idx = 0; // copied up to this index
+bool is_load_dac_buffer_triggered = false;
 // uint8_t oled_data[8][129] = {0b00000000};
 uint8_t oled_data[8][129] = { // 0x40 = following bytes are display data
     {0x40},
@@ -315,7 +325,7 @@ uint8_t oled_data[8][129] = { // 0x40 = following bytes are display data
     {0x40}
 };
 uint32_t render_oled_count = 0;
-volatile uint16_t curr_waveform_cycle = 0;
+volatile uint16_t curr_dac_buffer_cycle = 0;
 void render_oled(void){
   render_oled_count++;
 
@@ -330,7 +340,9 @@ void render_oled(void){
   uint16_t max_dac_value = 0;
   for (int i = 1; i < LOAD_DAC_BUFFER_SIZE; i++){
     uint16_t value = load_dac_buffer[i];
-    if (value > max_dac_value) max_dac_value = value;
+    if (value > max_dac_value) {
+      max_dac_value = value;
+    }
   }
   if (max_dac_value>4095) max_dac_value = 4095;
   uint16_t translate_y = (OUTPUT_MID-(max_dac_value)/2);
@@ -338,10 +350,10 @@ void render_oled(void){
   // fill with new data
   for (int i = 0; i < LOAD_DAC_BUFFER_SIZE; i++) {
     // map to oled_data
-    uint16_t value = load_dac_buffer[i]+translate_y;
+    // uint16_t value = load_dac_buffer[i]+translate_y;
+    uint16_t value = load_dac_buffer[i];
     // clamp DAC value to avoid HardFault
     if (value > 4095) value = 4095;
-    else if (value < 0) value = 0;
     uint8_t y = 63-(value >> 6); // just slightly more optimized, sacrificing accuracy for the edges of the mapping
     uint16_t x = i*((float)127/(LOAD_DAC_BUFFER_SIZE-1))+1; // map LOAD_DAC_BUFFER_SIZE to 128 pixels
     oled_data[y / 8][x] |= 1 << (y%8);
@@ -353,7 +365,8 @@ void render_oled(void){
 
     // connect curr pixel to next pixel
     if (i+1==LOAD_DAC_BUFFER_SIZE) break;
-    uint16_t value_next = load_dac_buffer[i+1]+translate_y;
+    // uint16_t value_next = load_dac_buffer[i+1]+translate_y;
+    uint16_t value_next = load_dac_buffer[i+1];
     // clamp value again here
     if (value_next > 4095) value_next = 4095;
     if (value_next < 0) value_next = 0;
@@ -380,9 +393,7 @@ void render_oled(void){
       } else {
         oled_data[y_next / 8][x] = (uint8_t)~0 >> (7-(y_next%8));
       }
-    } else {
     }
-
   }   
 
   // send i2c command to oled
@@ -401,33 +412,80 @@ void render_oled(void){
     );
   }
 
-  curr_waveform_cycle = 0; // done using buffer. ready to update
+  curr_dac_buffer_cycle = 0; // done using buffer. ready to update
+  curr_load_dac_buffer_idx = 0; // done using buffer. ready to update
+  is_load_dac_buffer_triggered = false;
+  // printf("phase_trigger_index: %d\n", phase_trigger_index);
+  phase_trigger_index = -1;
 }
 
 // OLED TEST
 static void copy_dac_buffer(void){
-  if (curr_waveform_cycle >= WAVEFORM_CYCLE_COUNT) return;
-  if (curr_waveform_cycle%2==0) {
-    for (int i = 0; i < DAC_DMA_BUFFER_SIZE; i++) {
-      load_dac_buffer[i+((curr_waveform_cycle/2)*(2*DAC_DMA_BUFFER_SIZE))] = dac_dma_buffer[i];
+  // if (curr_waveform_cycle >= WAVEFORM_CYCLE_COUNT) return;
+  if (curr_load_dac_buffer_idx == LOAD_DAC_BUFFER_SIZE) return;
+
+  // // uint16_t max = 0;
+  // // for (int i = 0; i < DAC_DMA_BUFFER_SIZE; i++) {
+  // //   if (dac_dma_buffer[i] > max) max = dac_dma_buffer[i];
+  // // }
+  // // uint16_t min = max;
+  // // for (int i = 0; i < DAC_DMA_BUFFER_SIZE; i++) {
+  // //   if (dac_dma_buffer[i] < min) min = dac_dma_buffer[i];
+  // // }
+  // // printf("min: %u, max: %u\n", min, max);
+  // // only start copying when trigger is detected. trigger = 0
+
+
+  // if (phase_trigger_index < 0) return;
+  // uint16_t buffer_offset = (curr_dac_buffer_cycle % 2) * DAC_DMA_BUFFER_SIZE;
+
+  // // printf("cycle=%lu offset=%u trigger=%d absolute=%u\n",
+  // //      curr_dac_buffer_cycle,
+  // //      buffer_offset,
+  // //      phase_trigger_index,
+  // //      buffer_offset + phase_trigger_index);
+
+  // // local and absolute is in relation to the circular buffer
+  // for (int local_i = 0; local_i < DAC_DMA_BUFFER_SIZE; local_i++) {
+  //   if (curr_load_dac_buffer_idx == LOAD_DAC_BUFFER_SIZE) return;
+  //   uint16_t absolute_i  = local_i + buffer_offset;
+  
+  //   if ( local_i==phase_trigger_index) {
+  //     // printf("absolute_i: %u\n", absolute_i);
+  //     is_load_dac_buffer_triggered = true;
+  //   }
+  //   if (!is_load_dac_buffer_triggered) continue;
+  //   // if (curr_load_dac_buffer_idx==0) {
+  //   //   printf("dac_dma_buffer[absolute_i]: %u\n", dac_dma_buffer[absolute_i]);
+  //   // }
+
+  //   load_dac_buffer[curr_load_dac_buffer_idx++] = dac_dma_buffer[absolute_i];
+  // }
+
+  for (int i = (curr_dac_buffer_cycle%2)*DAC_DMA_BUFFER_SIZE; i < ((curr_dac_buffer_cycle%2)+1)*DAC_DMA_BUFFER_SIZE; i++) {
+    if (curr_load_dac_buffer_idx == LOAD_DAC_BUFFER_SIZE) break;
+
+    if (i>0 && dac_dma_buffer[i - 1] < OUTPUT_MID && dac_dma_buffer[i] >= OUTPUT_MID) {
+      is_load_dac_buffer_triggered = true;
     }
-  } else {
-    for (int i = DAC_DMA_BUFFER_SIZE; i < 2*DAC_DMA_BUFFER_SIZE; i++) {
-      load_dac_buffer[i+((curr_waveform_cycle/2)*(2*DAC_DMA_BUFFER_SIZE))] = dac_dma_buffer[i];
-    }
+
+    if (!is_load_dac_buffer_triggered) break;
+    load_dac_buffer[curr_load_dac_buffer_idx++] = dac_dma_buffer[i];
   }
-  curr_waveform_cycle++;
+
 }
 
 inline void HAL_DAC_ConvHalfCpltCallbackCh1(DAC_HandleTypeDef *hdac)
 {
   do_dac(&dac_dma_buffer[0]); // fill first half of buffer
   copy_dac_buffer();
+  curr_dac_buffer_cycle++;
 }
 inline void HAL_DAC_ConvCpltCallbackCh1(DAC_HandleTypeDef *hdac)
 {
   do_dac(&dac_dma_buffer[DAC_DMA_BUFFER_SIZE]); // fill second half of buffer
   copy_dac_buffer();
+  curr_dac_buffer_cycle++;
 }
 
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc){
@@ -613,7 +671,8 @@ int main(void)
 
       // if (curr_waveform_cycle == WAVEFORM_CYCLE_COUNT) render_oled();
     }
-    if (curr_waveform_cycle == WAVEFORM_CYCLE_COUNT) render_oled();
+    // if (curr_waveform_cycle == WAVEFORM_CYCLE_COUNT) render_oled();
+    if (curr_load_dac_buffer_idx == LOAD_DAC_BUFFER_SIZE) render_oled();
     // render_oled();
 
     loop_counter++;

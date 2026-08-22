@@ -41,6 +41,6 @@ void iter_chord();
 
 void synth_init(void);
 void set_osc1_freq(float freq);
-float synth_process(void);
+float synth_process(uint16_t curr_buffer_idx);
 
 #endif
